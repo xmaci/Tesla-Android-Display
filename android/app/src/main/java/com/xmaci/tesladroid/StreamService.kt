@@ -311,44 +311,57 @@ class StreamService : Service(), CarServer.Listener {
             val now = SystemClock.uptimeMillis()
             val prev = shown
             val needFull = forceFull || !partialOk || prev == null || shownW != fw || shownH != fh
-            val rect: IntArray? = if (needFull) intArrayOf(0, 0, fw, fh)
-                else FrameDiff.changedRect(cur, prev!!, fw, fh)
-            if (rect == null) {
+            var rects: List<IntArray> = if (needFull) listOf(intArrayOf(0, 0, fw, fh))
+                else FrameDiff.changedRects(cur, prev!!, fw, fh)
+            if (rects.isEmpty()) {
                 // Nothing visible changed: send nothing, free the slot.
                 synchronized(lock) { inFlight.remove(seq); stIdle++ }
                 spare = cur
                 full.recycle()
                 continue
             }
-            var (rx, ry, rw, rh) = rect.toList()
-            // Large changes or a stale picture: send the whole frame (cleans JPEG seams too).
-            if (rw * rh > fw * fh * 6 / 10 || now - lastFullAt > 6000) { rx = 0; ry = 0; rw = fw; rh = fh }
-            if (rw == fw && rh == fh) { lastFullAt = now; forceFull = false }
+            // Large total change or a stale picture: send the whole frame (cleans JPEG seams too).
+            val total = rects.sumOf { it[2].toLong() * it[3] }
+            if (total > fw.toLong() * fh * 6 / 10 || now - lastFullAt > 6000) rects = listOf(intArrayOf(0, 0, fw, fh))
+            if (rects.size == 1 && rects[0][2] == fw && rects[0][3] == fh) { lastFullAt = now; forceFull = false }
             spare = shown
             shown = cur; shownW = fw; shownH = fh
 
-            val part = if (rw == fw && rh == fh) full else Bitmap.createBitmap(full, rx, ry, rw, rh)
-            val t0 = SystemClock.uptimeMillis()
-            out.reset()
-            part.compress(Bitmap.CompressFormat.JPEG, quality, out)
-            val enc = (SystemClock.uptimeMillis() - t0).toInt()
-            val jpeg = out.toByteArray()
-            // seq u32 · frame w,h u16 · enc ms u16 · quality u16 · rect x,y,w,h u16  (20 bytes)
-            val header = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
-                .putInt(seq.toInt()).putShort(fw.toShort()).putShort(fh.toShort())
-                .putShort(enc.coerceAtMost(65535).toShort()).putShort(quality.toShort())
-                .putShort(rx.toShort()).putShort(ry.toShort()).putShort(rw.toShort()).putShort(rh.toShort())
-                .array()
-            if (part !== full) part.recycle()
+            // One message per rectangle (typing: keyboard strip + text line, not the screen between).
+            // Quality field bit 15 = "more rectangles of this capture follow".
+            var sentArea = 0L
+            for ((i, r) in rects.withIndex()) {
+                val (rx, ry, rw, rh) = r.toList()
+                val mseq = if (i == 0) seq else synchronized(lock) { (++sendSeq).also { inFlight[it] = now } }
+                val part = if (rw == fw && rh == fh) full else Bitmap.createBitmap(full, rx, ry, rw, rh)
+                val t0 = SystemClock.uptimeMillis()
+                out.reset()
+                part.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                val enc = (SystemClock.uptimeMillis() - t0).toInt()
+                val jpeg = out.toByteArray()
+                if (part !== full) part.recycle()
+                val more = if (i < rects.size - 1) 0x8000 else 0
+                // seq u32 · frame w,h u16 · enc ms u16 · quality|more u16 · rect x,y,w,h u16  (20 bytes)
+                val header = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
+                    .putInt(mseq.toInt()).putShort(fw.toShort()).putShort(fh.toShort())
+                    .putShort(enc.coerceAtMost(65535).toShort()).putShort((quality or more).toShort())
+                    .putShort(rx.toShort()).putShort(ry.toShort()).putShort(rw.toShort()).putShort(rh.toShort())
+                    .array()
+                val ok = conn?.sendBinary(header, jpeg) ?: false
+                synchronized(lock) {
+                    if (!ok) { inFlight.remove(mseq); forceFull = true } else inFlight[mseq] = SystemClock.uptimeMillis()
+                    stBytes += jpeg.size
+                    stEnc += enc
+                }
+                sentArea += rw.toLong() * rh
+                if (!ok) break
+            }
             full.recycle()
-            val ok = conn?.sendBinary(header, jpeg) ?: false
+            val areaPm = (sentArea * 1000 / (fw.toLong() * fh)).toInt()
             synchronized(lock) {
-                if (!ok) { inFlight.remove(seq); forceFull = true } else inFlight[seq] = SystemClock.uptimeMillis()
-                stBytes += jpeg.size
-                stEnc += enc
                 stSent++
-                stArea += (rw.toLong() * rh * 1000) / (fw.toLong() * fh)
-                noteChange(((rw.toLong() * rh * 1000) / (fw.toLong() * fh)).toInt(), SystemClock.uptimeMillis())
+                stArea += areaPm
+                noteChange(areaPm, SystemClock.uptimeMillis())
             }
             maybeStats()
         }

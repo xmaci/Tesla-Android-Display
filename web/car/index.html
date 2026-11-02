@@ -48,7 +48,7 @@
   <button id="kNotif">☰</button>
   <button id="bSet">⚙</button>
   <div id="stats">…</div>
-  <div id="ver">v0.4.2</div>
+  <div id="ver">v0.4.3</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
@@ -243,6 +243,7 @@
     var dv = new DataView(ev.data);
     queue.push({
       buf: ev.data, t: now(), seq: dv.getUint32(0), fw: dv.getUint16(4), fh: dv.getUint16(6),
+      more: (dv.getUint16(10) & 0x8000) !== 0,      // more rectangles of the same screen update follow
       x: dv.getUint16(12), y: dv.getUint16(14), rw: dv.getUint16(16), rh: dv.getUint16(18)
     });
     pump();
@@ -293,7 +294,7 @@
   function done(f, dec, draw, wait) {
     lastDecode = dec; lastDraw = draw;
     ack(f.seq, dec, draw, wait, 1);
-    frames++;
+    if (!f.more) { frames++; }
     busy = false; pump();
   }
   function ack(seq, dec, draw, wait, shown) {

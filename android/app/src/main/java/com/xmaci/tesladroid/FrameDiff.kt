@@ -2,49 +2,75 @@ package com.xmaci.tesladroid
 
 /**
  * Finds what changed between two frames, so only that part is encoded, sent, decoded and
- * painted. On MCU1 the cost follows the number of pixels the car has to decode and paint,
- * so a blinking cursor or a moving map pin should cost a small rectangle, not a full frame.
+ * painted. On MCU1 the cost follows the number of pixels the car has to decode and paint.
  *
- * Pixels are ARGB ints, row-major, [w]×[h]. The frame is split into [tile]×[tile] tiles;
- * the result is the bounding box of all changed tiles (one rectangle keeps the car side simple).
+ * Pixels are ARGB ints, row-major, [w]×[h], compared in [tile]×[tile] tiles.
+ * Changes far apart (typing: the keyboard at the bottom and the text field at the top) are
+ * returned as separate rectangles instead of one box covering the whole screen.
  */
 object FrameDiff {
 
-    /** @return [x, y, w, h] of the changed area, or null if the frames are identical. */
-    fun changedRect(cur: IntArray, prev: IntArray, w: Int, h: Int, tile: Int = 32): IntArray? {
+    /** Tiles that differ, as a [tilesY][tilesX] grid; null if nothing changed. */
+    fun dirtyTiles(cur: IntArray, prev: IntArray, w: Int, h: Int, tile: Int): Array<BooleanArray>? {
         require(cur.size >= w * h && prev.size >= w * h)
         val tilesX = (w + tile - 1) / tile
-        var minTx = Int.MAX_VALUE; var maxTx = -1
-        var minTy = Int.MAX_VALUE; var maxTy = -1
+        val tilesY = (h + tile - 1) / tile
+        val grid = Array(tilesY) { BooleanArray(tilesX) }
+        var any = false
         for (y in 0 until h) {
-            val ty = y / tile
+            val rowFlags = grid[y / tile]
             val row = y * w
-            var tx = 0
-            while (tx < tilesX) {
-                // A tile already inside the box on this tile-row needs no check.
-                if (ty in minTy..maxTy && tx in minTx..maxTx) { tx = maxTx + 1; continue }
-                val x0 = tx * tile
-                val x1 = minOf(x0 + tile, w)
-                var i = row + x0
-                val end = row + x1
+            for (tx in 0 until tilesX) {
+                if (rowFlags[tx]) continue
+                var i = row + tx * tile
+                val end = row + minOf(tx * tile + tile, w)
                 while (i < end) {
-                    if (cur[i] != prev[i]) {
-                        if (tx < minTx) minTx = tx
-                        if (tx > maxTx) maxTx = tx
-                        if (ty < minTy) minTy = ty
-                        if (ty > maxTy) maxTy = ty
-                        break
-                    }
+                    if (cur[i] != prev[i]) { rowFlags[tx] = true; any = true; break }
                     i++
                 }
-                tx++
             }
         }
-        if (maxTx < 0) return null
-        val x = minTx * tile
-        val y = minTy * tile
-        val rw = minOf((maxTx + 1) * tile, w) - x
-        val rh = minOf((maxTy + 1) * tile, h) - y
-        return intArrayOf(x, y, rw, rh)
+        return if (any) grid else null
+    }
+
+    /**
+     * Changed areas as up to [maxRects] rectangles [x, y, w, h], top to bottom.
+     * Rows of tiles that changed are grouped into horizontal bands separated by unchanged rows;
+     * if there are more bands than [maxRects], the closest bands are merged.
+     * @return empty list if nothing changed.
+     */
+    fun changedRects(cur: IntArray, prev: IntArray, w: Int, h: Int, tile: Int = 32, maxRects: Int = 4): List<IntArray> {
+        val grid = dirtyTiles(cur, prev, w, h, tile) ?: return emptyList()
+        // bands in tile units: [ty0, ty1, tx0, tx1] inclusive
+        val bands = ArrayList<IntArray>()
+        for (ty in grid.indices) {
+            var minX = -1; var maxX = -1
+            for (tx in grid[ty].indices) if (grid[ty][tx]) { if (minX < 0) minX = tx; maxX = tx }
+            if (minX < 0) continue
+            val last = bands.lastOrNull()
+            if (last != null && last[1] == ty - 1) {
+                last[1] = ty; last[2] = minOf(last[2], minX); last[3] = maxOf(last[3], maxX)
+            } else bands.add(intArrayOf(ty, ty, minX, maxX))
+        }
+        while (bands.size > maxRects) {
+            // merge the neighbouring pair with the smallest vertical gap
+            var best = 0; var bestGap = Int.MAX_VALUE
+            for (i in 0 until bands.size - 1) {
+                val gap = bands[i + 1][0] - bands[i][1]
+                if (gap < bestGap) { bestGap = gap; best = i }
+            }
+            val a = bands[best]; val b = bands.removeAt(best + 1)
+            a[1] = b[1]; a[2] = minOf(a[2], b[2]); a[3] = maxOf(a[3], b[3])
+        }
+        return bands.map { b ->
+            val x = b[2] * tile; val y = b[0] * tile
+            intArrayOf(x, y, minOf((b[3] + 1) * tile, w) - x, minOf((b[1] + 1) * tile, h) - y)
+        }
+    }
+
+    /** Single bounding box of all changes, or null. */
+    fun changedRect(cur: IntArray, prev: IntArray, w: Int, h: Int, tile: Int = 32): IntArray? {
+        val r = changedRects(cur, prev, w, h, tile, 1)
+        return r.firstOrNull()
     }
 }

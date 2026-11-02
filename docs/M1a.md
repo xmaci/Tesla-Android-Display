@@ -92,6 +92,14 @@ Now, when >50 % of the frame changes on 3 frames in a row, the phone captures at
 pixels to decode); after 1.5 s of small or no changes it returns to full width. The car keeps the same
 on-screen size (softer picture while moving), ⚡ in the bar shows motion mode. ⚙ → Auto on/off.
 
+## 0.4.3 — several rectangles per update
+
+Field report: 17–20 fps idle, 7–10 fps while typing. Typing changes two far-apart areas (keyboard at the
+bottom, text field at the top); one bounding box covered almost the whole screen. `FrameDiff.changedRects`
+now groups changed tile rows into bands and sends up to 4 rectangles (closest bands merged first);
+full frame if their total exceeds 60 %. Header quality field bit 15 = more rectangles of this update follow
+(the car counts fps per complete update).
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

@@ -66,13 +66,16 @@ object Helper {
             "settings put secure accessibility_enabled 1", 1500)
 
         val apk = ctx.applicationInfo.sourceDir
-        runShell(adb, "CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
-            " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null &", 1500)
+        val launch = runShell(adb, "CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
+            " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null & echo launched", 1500)
         repeat(20) {
             ping(ctx)?.let { return "running: $it" }
             Thread.sleep(250)
         }
-        return "helper did not answer (see /data/local/tmp/tesladroid-helper.log)"
+        // Not answering: show what happened (the log is only readable by the shell user).
+        val diag = runShell(adb, "id; echo ---; cat /data/local/tmp/tesladroid-helper.log 2>&1 | tail -c 600; " +
+            "echo ---; ps -A 2>/dev/null | grep -i tesladroid", 2500)
+        return "helper did not answer.\nlaunch: ${launch.trim().ifEmpty { "(no output)" }}\n${diag.trim().take(900)}"
     }
 
     fun stop(ctx: Context) { request(ctx, "quit"); info = null }
@@ -94,6 +97,7 @@ object Helper {
             }
         } catch (e: Exception) {
             Log.w(TAG, "shell: $command", e)
+            out.append("[adb error: ${e.javaClass.simpleName}: ${e.message}]")
         }
         return out.toString()
     }

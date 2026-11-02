@@ -27,6 +27,8 @@ class CarServer(
         fun onOpen(conn: Conn)
         fun onText(conn: Conn, text: String)
         fun onClose(conn: Conn)
+        /** Long-lived HTTP responses (e.g. /mjpeg). Return true if handled; the socket is then owned by the listener. */
+        fun onHttp(path: String, sock: Socket, out: OutputStream): Boolean = false
     }
 
     companion object {
@@ -118,6 +120,7 @@ class CarServer(
                 upgrade(sock, input, out, headers["sec-websocket-key"] ?: return sock.close())
                 return
             }
+            if (listener.onHttp(path, sock, out)) return
             serveAsset(sock, out, if (path == "/") "index.html" else path.trimStart('/'))
         } catch (e: Exception) {
             try { sock.close() } catch (_: IOException) {}

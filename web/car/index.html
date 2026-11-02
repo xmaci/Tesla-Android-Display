@@ -17,6 +17,8 @@
     fit  canvas at frame size, CSS width/height scaling (slow on MCU1 — kept for comparison)
     1:1  no scaling
     img  two <img> elements, no canvas (full frames only)
+    mjpeg / mj1:1  <img src="/mjpeg">: the browser decodes and paints the stream natively, no JavaScript
+         per frame (MCU1's single JS thread is the bottleneck). Touch still goes over the WebSocket.
 -->
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: Arial, Helvetica, sans-serif; overflow: hidden; }
@@ -46,16 +48,16 @@
   <button id="kNotif">☰</button>
   <button id="bSet">⚙</button>
   <div id="stats">…</div>
-  <div id="ver">v0.4.0</div>
+  <div id="ver">v0.4.1</div>
 </div>
-<div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"></div>
+<div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
 <div id="panel">
   <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div></div>
   <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
   <div class="row"><div class="lbl">Кадрів у дорозі · Frames in flight</div><div id="optN"></div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
-    <div class="hint">gpu = великий і швидкий (тест) · draw · fit = старий повільний · 1:1 = малий найшвидший · img</div></div>
+    <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
   <button id="bClose">✕ Закрити · Close</button>
 </div>
 
@@ -71,7 +73,7 @@
   var panel = document.getElementById('panel');
   var shots = [document.getElementById('shotA'), document.getElementById('shotB')], front = 0, shotUrls = [null, null];
   var URLx = window.URL || window.webkitURL;
-  var ws = null, retry = null;
+  var ws = null, retry = null, everOpen = false;
   var frames = 0, lastFpsT = now(), localFps = 0;
   var lastDecode = 0, lastDraw = 0, server = {};
   var touchSent = 0, touchOk = 0, touchFail = 0, touchNoSvc = 0;
@@ -89,19 +91,21 @@
     w: ['320', '432', '540', '720'],
     q: ['25', '35', '50', '65'],
     n: ['1', '2', '3'],
-    v: ['gpu', 'draw', 'fit', '1:1', 'img']
+    v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img']
   };
   var set = {
     w: param('w') || load('w', '432'),
     q: param('q') || load('q', '35'),
     n: param('n') || load('n', '2'),
-    v: param('mode') || load('v', 'gpu')
+    v: param('mode') || load('v', 'mjpeg')
   };
-  if (OPT.v.indexOf(set.v) < 0) { set.v = 'gpu'; }
+  if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
+  var mj = document.getElementById('mj'), mjOn = false;
+  function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
   var frameW = 0, frameH = 0;
 
   function sendCfg() {
-    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (set.v === 'img' ? '0' : '1')); }
+    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1')); }
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
@@ -164,7 +168,7 @@
     var fw = frameW || 432, fh = frameH || 960;
     var sc = Math.min(aw / fw, ah / fh);
     var v = set.v, cw, ch, dispW, dispH, oldW = canvas.width, oldH = canvas.height;
-    if (v === '1:1') { sc = 1; }
+    if (v === '1:1' || v === 'mj1:1') { sc = 1; }
     dispW = Math.floor(fw * sc); dispH = Math.floor(fh * sc);
     if (v === 'draw') { cw = dispW; ch = dispH; } else { cw = fw; ch = fh; }
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
@@ -177,7 +181,15 @@
       canvas.style.width = dispW + 'px'; canvas.style.height = dispH + 'px';
       setTransform(canvas, 'none');
     }
-    canvas.style.display = v === 'img' ? 'none' : 'block';
+    canvas.style.display = (v === 'img' || isMj()) ? 'none' : 'block';
+    mj.style.width = dispW + 'px'; mj.style.height = dispH + 'px';
+    mj.style.left = left + 'px'; mj.style.top = top + 'px';
+    if (isMj()) {
+      mj.style.display = 'block';
+      if (!mjOn) { mjOn = true; mj.src = '/mjpeg?t=' + new Date().getTime(); }
+    } else if (mjOn) {
+      mjOn = false; mj.src = ''; mj.style.display = 'none';
+    }
     for (var i = 0; i < 2; i++) {
       var s = shots[i];
       s.style.width = dispW + 'px'; s.style.height = dispH + 'px';
@@ -185,7 +197,7 @@
       if (v !== 'img') { s.style.display = 'none'; }
     }
     // A resized canvas is blank: ask the phone for a complete frame.
-    if (canvas.width !== oldW || canvas.height !== oldH || v === 'img') { askFull(); }
+    if (!isMj() && (canvas.width !== oldW || canvas.height !== oldH || v === 'img')) { askFull(); }
   }
   window.onresize = layout;
   layout();
@@ -195,7 +207,11 @@
     retry = null;
     try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { schedule(); return; }
     ws.binaryType = 'arraybuffer';
-    ws.onopen = function () { queue = []; busy = false; msg.style.display = 'none'; sendCfg(); };
+    ws.onopen = function () {
+      queue = []; busy = false; msg.style.display = 'none'; sendCfg();
+      if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
+      everOpen = true;
+    };
     ws.onclose = function () { msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); };
     ws.onerror = function () {};
     ws.onmessage = onMessage;
@@ -207,7 +223,12 @@
   function onMessage(ev) {
     if (typeof ev.data === 'string') {
       var d = ev.data;
-      if (d.indexOf('s:') === 0) { try { server = JSON.parse(d.substr(2)); } catch (e) {} showStats(); }
+      if (d.indexOf('s:') === 0) {
+        try { server = JSON.parse(d.substr(2)); } catch (e) {}
+        // In MJPEG views the frame size is only known from the phone's stats.
+        if (isMj() && server.w && (server.w !== frameW || server.h !== frameH)) { frameW = server.w; frameH = server.h; layout(); }
+        showStats();
+      }
       else if (d.indexOf('ti:') === 0) {
         var r = d.substr(3);
         if (r === '1') { touchOk++; } else if (r === 'x') { touchNoSvc++; } else { touchFail++; }
@@ -280,7 +301,8 @@
     if (t - lastFpsT >= 1000) { localFps = frames * 1000 / (t - lastFpsT); frames = 0; lastFpsT = t; }
     var touch = server.touch === false ? 'touch OFF' :
       ('touch ' + touchSent + '→' + touchOk + (touchFail ? ' ✗' + touchFail : '') + (touchNoSvc ? ' no-svc' + touchNoSvc : ''));
-    statsEl.innerHTML = (Math.round(localFps * 10) / 10) + ' fps · ' + (server.lat || 0) + ' ms · ' +
+    var fps = isMj() ? (server.fps || 0) : Math.round(localFps * 10) / 10;
+    statsEl.innerHTML = fps + ' fps · ' + (isMj() ? 'wait ' : '') + (server.lat || 0) + ' ms · ' +
       (server.kb || 0) + ' KB · upd ' + (server.area || 0) + '% · ' + (server.w || frameW) + '×' + (server.h || frameH) +
       ' · ' + set.v + '<br>' +
       'enc ' + (server.enc || 0) + ' · net ' + (server.net || 0) + ' · wait ' + (server.wait || 0) +
@@ -289,7 +311,7 @@
 
   // ---- touch on the picture ----
   var lastMove = 0, lastTouchT = 0, touching = false;
-  function picture() { return set.v === 'img' ? shots[front] : canvas; }
+  function picture() { return isMj() ? mj : set.v === 'img' ? shots[front] : canvas; }
   function pos(clientX, clientY) {
     var r = picture().getBoundingClientRect();
     if (!r.width || !r.height) { return null; }

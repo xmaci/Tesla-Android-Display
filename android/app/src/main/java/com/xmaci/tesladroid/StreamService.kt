@@ -113,6 +113,8 @@ class StreamService : Service(), CarServer.Listener {
 
     // Partial updates: what the car currently shows (pixels of everything sent so far)
     @Volatile private var partialOk = true          // car can draw sub-rectangles (not in 'img' mode)
+    @Volatile private var mjpegMode = false         // car shows the /mjpeg stream: WebSocket sends no frames
+    @Volatile private var mjpegGen = 0              // newest /mjpeg client wins
     @Volatile private var forceFull = true          // next frame must be complete (connect, resize, car request)
     private var shown: IntArray? = null             // car-side picture, frameW*frameH
     private var spare: IntArray? = null             // reused buffer for the next capture
@@ -275,7 +277,7 @@ class StreamService : Service(), CarServer.Listener {
                 val it = inFlight.entries.iterator()
                 while (it.hasNext()) if (now - it.next().value > 2000) it.remove()
                 val c = conn
-                if (c == null || !c.open || inFlight.size >= window || captureSeq == sentCaptureSeq || frame == null) {
+                if (mjpegMode || c == null || !c.open || inFlight.size >= window || captureSeq == sentCaptureSeq || frame == null) {
                     lock.wait(50)
                 } else {
                     crop = Bitmap.createBitmap(frame!!, 0, 0, frameW, frameH)
@@ -363,6 +365,66 @@ class StreamService : Service(), CarServer.Listener {
         c.sendText("s:$json")
     }
 
+    // ---------- MJPEG: frames decoded natively by the car browser, no JavaScript per frame ----------
+
+    /**
+     * GET /mjpeg -> multipart/x-mixed-replace stream of JPEGs for an <img>.
+     * Pacing is TCP backpressure: a small send buffer makes write() block while the car is
+     * still busy, and each loop sends only the newest capture, so frames never pile up.
+     */
+    override fun onHttp(path: String, sock: java.net.Socket, out: java.io.OutputStream): Boolean {
+        if (path != "/mjpeg") return false
+        val gen = ++mjpegGen
+        try {
+            sock.tcpNoDelay = true
+            sock.sendBufferSize = 32 * 1024
+            sock.soTimeout = 0
+            out.write(("HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=tdframe\r\n" +
+                "Cache-Control: no-store\r\nConnection: close\r\n\r\n").toByteArray())
+            out.flush()
+            val buf = ByteArrayOutputStream(256 * 1024)
+            var lastSent = -1L
+            var lastWrite = 0L
+            while (running && gen == mjpegGen && !sock.isClosed) {
+                var copy: Bitmap? = null
+                synchronized(lock) {
+                    val idle = SystemClock.uptimeMillis() - lastWrite
+                    // New capture, or resend the current one every 2 s (keeps the stream alive).
+                    if (frame != null && (captureSeq != lastSent || idle > 2000)) {
+                        copy = Bitmap.createBitmap(frame!!, 0, 0, frameW, frameH)
+                        lastSent = captureSeq
+                    } else lock.wait(40)
+                }
+                val bmp = copy ?: continue
+                val t0 = SystemClock.uptimeMillis()
+                buf.reset()
+                bmp.compress(Bitmap.CompressFormat.JPEG, quality, buf)
+                bmp.recycle()
+                val enc = (SystemClock.uptimeMillis() - t0).toInt()
+                val tw = SystemClock.uptimeMillis()
+                out.write(("--tdframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${buf.size()}\r\n\r\n").toByteArray())
+                buf.writeTo(out)
+                out.write("\r\n".toByteArray())
+                out.flush()                                      // blocks while the car is behind
+                lastWrite = SystemClock.uptimeMillis()
+                synchronized(lock) {
+                    stFrames++
+                    stBytes += buf.size()
+                    stEnc += enc
+                    stSent++
+                    stArea += 1000
+                    stLatency += lastWrite - tw                  // time blocked = how far the car lags
+                    stDecode += 0
+                }
+                maybeStats()
+            }
+        } catch (_: Exception) {
+        } finally {
+            try { sock.close() } catch (_: Exception) {}
+        }
+        return true
+    }
+
     // ---------- CarServer.Listener ----------
 
     override fun onOpen(conn: CarServer.Conn) {
@@ -400,7 +462,7 @@ class StreamService : Service(), CarServer.Listener {
             "cfg" -> {
                 p.getOrNull(2)?.toIntOrNull()?.let { quality = it.coerceIn(20, 90) }
                 p.getOrNull(3)?.toIntOrNull()?.let { window = it.coerceIn(1, 4) }
-                p.getOrNull(4)?.let { partialOk = it != "0" }
+                p.getOrNull(4)?.let { partialOk = it == "1"; mjpegMode = it == "m" }
                 forceFull = true
                 p.getOrNull(1)?.toIntOrNull()?.let { if (it != wantWidth) { wantWidth = it; resize(it) } }
                 synchronized(lock) { sentCaptureSeq = 0; lock.notifyAll() }

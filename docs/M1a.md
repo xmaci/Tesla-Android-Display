@@ -76,6 +76,14 @@ same ceiling. **Decision for MCU1:** render apps on a car-shaped virtual display
   can no longer skip a value. Bar buttons accept one action per 0.6–1 s.
 - **Touch diagnostics:** the phone answers every gesture with `ti:1|0|x`; the bar shows `touch sent→ok`.
 
+## 0.4.1 — MJPEG views (no JavaScript per frame)
+
+The `net` time of 70–200 ms for 6–15 KB frames pointed at MCU1's single JavaScript thread, not the
+network: every frame went WebSocket → Blob → Image → decode → canvas in slow JS. Views **mjpeg** (default,
+scaled) and **mj1:1** use `<img src="/mjpeg">` (multipart/x-mixed-replace): the browser decodes and
+paints natively. The phone paces the stream by TCP backpressure (32 KB send buffer, newest capture only),
+so frames cannot pile up. Touch and stats still use the WebSocket; in these views fps comes from the phone.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

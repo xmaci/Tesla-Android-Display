@@ -6,8 +6,9 @@
 <title>Tesla Probe M0</title>
 <!--
   M0 capability probe for the Tesla browser (MCU1 Tegra / MCU2 Intel / MCU3 Ryzen).
-  Plain ES5 on purpose: no let/const, arrows, template strings, Promises required.
-  Served by tools/probe-server/probe_server.py, which also provides /ws and /results.
+  Plain ES5 on purpose. Heavy work is split into small steps with setTimeout so the
+  old MCU1 browser never stops the script for running too long.
+  Served by tools/probe-server/probe_server.py (/ws, /mjpeg, /mjpeg-result, /results).
 -->
 <style>
   body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #111; color: #eee; font-size: 20px; }
@@ -20,6 +21,7 @@
   button.alt { background: #3a3a3a; }
   button.ok { background: #2e8b57; }
   button.no { background: #b03a2e; }
+  h2 { font-size: 20px; color: #9ab; margin: 18px 0 6px; }
   table { border-collapse: collapse; width: 100%; font-size: 18px; }
   td { border-bottom: 1px solid #2a2a2a; padding: 7px 8px; vertical-align: top; }
   td.k { color: #aaa; width: 40%; }
@@ -27,26 +29,26 @@
   .fail { color: #ff7b6b; }
   .warn { color: #f5c04a; }
   #status { color: #f5c04a; margin: 6px 0 12px; min-height: 24px; }
-  #touch { height: 160px; background: #222; border: 2px dashed #555; border-radius: 8px; margin: 10px 0; text-align: center; line-height: 160px; color: #888; }
+  #touch { height: 140px; background: #222; border: 2px dashed #555; border-radius: 8px; margin: 10px 0; text-align: center; line-height: 140px; color: #888; }
   #stage { margin: 10px 0; }
-  canvas, video { background: #000; max-width: 100%; display: block; margin: 6px 0; }
+  #stage canvas, #stage img, #stage video { background: #000; width: 480px; display: block; margin: 6px 0; }
   textarea { width: 100%; height: 160px; background: #000; color: #9f9; font-size: 14px; }
   .hidden { display: none; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Tesla Probe · M0</h1>
+  <h1>Tesla Probe · M0.2</h1>
   <div class="sub">Перевірка можливостей браузера Tesla · Tesla browser capability check</div>
 </header>
 <main>
   <div class="btns">
-    <button id="btnAll">Запустити все · Run all</button>
-    <button id="btnAudio" class="alt">Тест звуку · Audio test</button>
-    <button id="btnSend" class="alt">Надіслати · Send results</button>
+    <button id="btnAll">1. Запустити все · Run all</button>
+    <button id="btnAudio" class="alt">2. Тест звуку · Audio test</button>
+    <button id="btnSend" class="alt">3. Надіслати · Send results</button>
   </div>
   <div id="audioAsk" class="hidden">
-    Чути тон? · Did you hear a tone?
+    <span id="audioWhat">Чути звук? · Did you hear it?</span>
     <button id="heardYes" class="ok">Так · Yes</button>
     <button id="heardNo" class="no">Ні · No</button>
   </div>
@@ -54,9 +56,16 @@
 
   <div id="touch">Торкніться тут 1–3 пальцями · Touch here with 1–3 fingers</div>
 
+  <h2>Швидкість · Speed</h2>
+  <table id="benchOut"></table>
+  <div id="stage"></div>
+
+  <h2>Звук · Audio</h2>
+  <table id="audioOut"></table>
+
+  <h2>Можливості · Features</h2>
   <table id="out"></table>
 
-  <div id="stage"></div>
   <p>JSON:</p>
   <textarea id="json" readonly></textarea>
 </main>
@@ -65,29 +74,32 @@
 (function () {
   'use strict';
 
-  var R = { version: 'M0.1', time: new Date().toString(), env: {}, features: {}, media: {}, bench: {}, touch: {}, audio: {} };
-  var outEl = document.getElementById('out');
+  var R = { version: 'M0.2', time: new Date().toString(), env: {}, features: {}, media: {}, bench: {}, touch: {}, audio: {}, errors: {} };
   var statusEl = document.getElementById('status');
   var stage = document.getElementById('stage');
+  var URLx = window.URL || window.webkitURL;
 
   function $(id) { return document.getElementById(id); }
   function status(t) { statusEl.innerHTML = t; }
   function now() { return (window.performance && performance.now) ? performance.now() : new Date().getTime(); }
   function round(x, d) { var m = Math.pow(10, d || 0); return Math.round(x * m) / m; }
-
-  function row(key, value, cls) {
-    var tr = document.createElement('tr');
-    var a = document.createElement('td'); a.className = 'k'; a.appendChild(document.createTextNode(key));
-    var b = document.createElement('td'); if (cls) { b.className = cls; }
-    b.appendChild(document.createTextNode(String(value)));
-    tr.appendChild(a); tr.appendChild(b); outEl.appendChild(tr);
-  }
   function yes(v) { return v ? 'yes' : 'no'; }
   function yc(v) { return v ? 'pass' : 'fail'; }
   function dump() { try { $('json').value = JSON.stringify(R, null, 2); } catch (e) { $('json').value = String(e); } }
 
+  function row(tableId, key, value, cls) {
+    var tr = document.createElement('tr');
+    var a = document.createElement('td'); a.className = 'k'; a.appendChild(document.createTextNode(key));
+    var b = document.createElement('td'); if (cls) { b.className = cls; }
+    b.appendChild(document.createTextNode(String(value)));
+    tr.appendChild(a); tr.appendChild(b); $(tableId).appendChild(tr);
+  }
+  function frow(k, v, c) { row('out', k, v, c); }
+  function brow(k, v, c) { row('benchOut', k, v, c); }
+  function arow(k, v, c) { row('audioOut', k, v, c); }
+
   function tryRun(name, fn) {
-    try { return fn(); } catch (e) { R.errors = R.errors || {}; R.errors[name] = String(e); row(name, 'error: ' + e, 'fail'); return null; }
+    try { return fn(); } catch (e) { R.errors[name] = String(e); frow(name, 'error: ' + e, 'fail'); return null; }
   }
 
   // ---------- 1. Environment + features ----------
@@ -99,18 +111,17 @@
     env.dpr = window.devicePixelRatio || 1;
     env.cores = navigator.hardwareConcurrency || null;
     env.location = location.href;
-    row('User agent', env.userAgent);
-    row('Screen / viewport', env.screen + ' / ' + env.inner + ' @' + env.dpr + 'x');
+    frow('User agent', env.userAgent);
+    frow('Screen / viewport', env.screen + ' / ' + env.inner + ' @' + env.dpr + 'x');
 
     var f = R.features;
     var c = document.createElement('canvas');
     f.canvas2d = !!(c.getContext && c.getContext('2d'));
     f.webgl = !!(c.getContext && (c.getContext('webgl') || c.getContext('experimental-webgl')));
     f.webSocket = typeof WebSocket !== 'undefined';
-    f.binaryArrayBuffer = false;
     f.typedArrays = typeof Uint8Array !== 'undefined';
     f.blob = typeof Blob !== 'undefined';
-    f.createObjectURL = !!(window.URL && URL.createObjectURL) || !!(window.webkitURL && webkitURL.createObjectURL);
+    f.createObjectURL = !!(URLx && URLx.createObjectURL);
     f.createImageBitmap = typeof window.createImageBitmap === 'function';
     f.requestAnimationFrame = !!(window.requestAnimationFrame || window.webkitRequestAnimationFrame);
     f.promise = typeof Promise !== 'undefined';
@@ -128,7 +139,7 @@
 
     var keys = ['canvas2d', 'webgl', 'webSocket', 'typedArrays', 'blob', 'createObjectURL', 'createImageBitmap', 'requestAnimationFrame',
       'promise', 'fetch', 'worker', 'webAssembly', 'es6', 'es2017async', 'touchEvents', 'pointerEvents', 'geolocation', 'localStorage', 'fullscreen', 'wakeLock'];
-    for (var i = 0; i < keys.length; i++) { row(keys[i], yes(f[keys[i]]), yc(f[keys[i]])); }
+    for (var i = 0; i < keys.length; i++) { frow(keys[i], yes(f[keys[i]]), yc(f[keys[i]])); }
   }
 
   // ---------- 2. Media support ----------
@@ -137,278 +148,278 @@
     var MS = window.MediaSource || window.WebKitMediaSource;
     m.mediaSource = !!MS;
     m.mseTypes = {};
-    var types = [
-      'video/mp4; codecs="avc1.42E01F"',
-      'video/mp4; codecs="avc1.4D401F"',
-      'video/mp4; codecs="avc1.640028"',
-      'video/mp4; codecs="hev1.1.6.L93.B0"',
-      'video/mp4; codecs="hvc1.1.6.L93.B0"',
-      'audio/mp4; codecs="mp4a.40.2"',
-      'audio/webm; codecs="opus"'
-    ];
-    for (var i = 0; i < types.length; i++) {
-      m.mseTypes[types[i]] = !!(MS && MS.isTypeSupported && MS.isTypeSupported(types[i]));
-    }
+    var types = ['video/mp4; codecs="avc1.42E01F"', 'video/mp4; codecs="avc1.4D401F"', 'video/mp4; codecs="hev1.1.6.L93.B0"'];
+    for (var i = 0; i < types.length; i++) { m.mseTypes[types[i]] = !!(MS && MS.isTypeSupported && MS.isTypeSupported(types[i])); }
     var v = document.createElement('video');
     var a = document.createElement('audio');
     m.canPlay = {
-      'video/mp4 avc1.42E01E': v.canPlayType ? v.canPlayType('video/mp4; codecs="avc1.42E01E"') : '',
-      'video/mp4 hev1': v.canPlayType ? v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') : '',
-      'audio/ogg opus': a.canPlayType ? a.canPlayType('audio/ogg; codecs="opus"') : '',
-      'audio/wav': a.canPlayType ? a.canPlayType('audio/wav') : ''
+      'video/mp4 avc1': v.canPlayType ? v.canPlayType('video/mp4; codecs="avc1.42E01E"') : 'n/a',
+      'audio/mpeg': a.canPlayType ? a.canPlayType('audio/mpeg') : 'n/a',
+      'audio/wav': a.canPlayType ? a.canPlayType('audio/wav') : 'n/a',
+      'audio/ogg opus': a.canPlayType ? a.canPlayType('audio/ogg; codecs="opus"') : 'n/a'
     };
     m.webCodecsVideo = typeof window.VideoDecoder !== 'undefined';
-    m.webCodecsAudio = typeof window.AudioDecoder !== 'undefined';
     m.webAudio = !!(window.AudioContext || window.webkitAudioContext);
-    m.scriptProcessor = m.webAudio;
-    m.audioWorklet = typeof window.AudioWorkletNode !== 'undefined';
+    m.audioElement = typeof window.Audio !== 'undefined';
     m.getUserMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
-    row('MediaSource (MSE)', yes(m.mediaSource), yc(m.mediaSource));
-    for (var t in m.mseTypes) { if (m.mseTypes.hasOwnProperty(t)) { row('  MSE ' + t, yes(m.mseTypes[t]), yc(m.mseTypes[t])); } }
-    for (var c in m.canPlay) { if (m.canPlay.hasOwnProperty(c)) { row('canPlayType ' + c, m.canPlay[c] || '""', m.canPlay[c] ? 'pass' : 'fail'); } }
-    row('WebCodecs video / audio', yes(m.webCodecsVideo) + ' / ' + yes(m.webCodecsAudio), yc(m.webCodecsVideo));
-    row('Web Audio', yes(m.webAudio), yc(m.webAudio));
-    row('AudioWorklet', yes(m.audioWorklet), yc(m.audioWorklet));
-    row('getUserMedia (mic)', yes(m.getUserMedia), yc(m.getUserMedia));
+    frow('MediaSource (MSE)', yes(m.mediaSource), yc(m.mediaSource));
+    for (var t in m.mseTypes) { if (m.mseTypes.hasOwnProperty(t)) { frow('  MSE ' + t, yes(m.mseTypes[t]), yc(m.mseTypes[t])); } }
+    for (var c in m.canPlay) { if (m.canPlay.hasOwnProperty(c)) { frow('canPlayType ' + c, m.canPlay[c] || '""', m.canPlay[c] ? 'pass' : 'fail'); } }
+    frow('WebCodecs', yes(m.webCodecsVideo), yc(m.webCodecsVideo));
+    frow('Web Audio', yes(m.webAudio), yc(m.webAudio));
+    frow('<audio> element', yes(m.audioElement), yc(m.audioElement));
+    frow('getUserMedia (mic)', yes(m.getUserMedia), yc(m.getUserMedia));
   }
 
-  // ---------- 3. Canvas benchmark ----------
+  // ---------- 3. Canvas benchmark (one small frame per tick) ----------
   function testCanvas(done) {
-    var w = 1024, h = 576;
+    var w = 640, h = 360, n = 10, k = 0, total = 0;
     var c = document.createElement('canvas'); c.width = w; c.height = h;
+    stage.innerHTML = ''; stage.appendChild(c);
     var ctx = c.getContext('2d');
-    if (!ctx) { row('Canvas bench', 'no 2d context', 'fail'); return done(); }
+    if (!ctx) { brow('Canvas', 'no 2d context', 'fail'); return done(); }
     var img = ctx.createImageData(w, h);
-    var d = img.data;
-    var n = 30, t0 = now();
-    for (var k = 0; k < n; k++) {
-      for (var i = 0; i < d.length; i += 4) { d[i] = (i + k * 7) & 255; d[i + 1] = k * 3 & 255; d[i + 2] = 128; d[i + 3] = 255; }
+    var px = (typeof Uint32Array !== 'undefined' && img.data.buffer) ? new Uint32Array(img.data.buffer) : null;
+    function tick() {
+      var t0 = now();
+      if (px) { var col = 0xff000000 | (k * 20 << 8); for (var i = 0; i < px.length; i++) { px[i] = col; } }
+      else { var d = img.data; for (var j = 0; j < d.length; j += 4) { d[j + 1] = k * 20; d[j + 3] = 255; } }
       ctx.putImageData(img, 0, 0);
+      total += now() - t0;
+      k++;
+      if (k < n) { setTimeout(tick, 0); } else {
+        var ms = total / n;
+        R.bench.canvas640x360_ms = round(ms, 1);
+        brow('Canvas fill+put 640×360', round(ms, 1) + ' ms/frame', ms < 33 ? 'pass' : 'warn');
+        done();
+      }
     }
-    var ms = (now() - t0) / n;
-    R.bench.canvasPutImageData1024x576_ms = round(ms, 1);
-    row('Canvas fill+putImageData 1024×576', round(ms, 1) + ' ms/frame (' + round(1000 / ms, 1) + ' fps max)', ms < 50 ? 'pass' : 'warn');
-    done();
+    setTimeout(tick, 0);
   }
 
   // ---------- 4. WebSocket tests ----------
   var ws = null;
   function wsUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'; }
 
-  function openWs(cb) {
-    if (!R.features.webSocket) { row('WebSocket', 'not available', 'fail'); return cb(false); }
-    try { ws = new WebSocket(wsUrl()); } catch (e) { row('WebSocket', 'error ' + e, 'fail'); return cb(false); }
-    try { ws.binaryType = 'arraybuffer'; R.features.binaryArrayBuffer = ws.binaryType === 'arraybuffer'; } catch (e2) { R.features.binaryArrayBuffer = false; }
-    var timer = setTimeout(function () { row('WebSocket connect', 'timeout', 'fail'); cb(false); }, 5000);
-    ws.onopen = function () { clearTimeout(timer); row('WebSocket connect', 'ok, binaryType arraybuffer: ' + yes(R.features.binaryArrayBuffer), 'pass'); cb(true); };
-    ws.onerror = function () { clearTimeout(timer); row('WebSocket connect', 'error (server running?)', 'fail'); cb(false); };
+  function openWs(done) {
+    if (!R.features.webSocket) { brow('WebSocket', 'not available', 'fail'); return done(); }
+    try { ws = new WebSocket(wsUrl()); } catch (e) { brow('WebSocket', 'error ' + e, 'fail'); return done(); }
+    try { ws.binaryType = 'arraybuffer'; } catch (e2) {}
+    R.features.binaryType = ws.binaryType;
+    ws.onopen = function () { R.bench.wsOk = true; brow('WebSocket connect', 'ok, binaryType=' + ws.binaryType, 'pass'); done(); };
+    ws.onerror = function () { brow('WebSocket connect', 'error', 'fail'); done(); };
   }
 
   function testPing(done) {
-    var times = [], i = 0, total = 20;
+    var times = [], total = 20;
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string' && ev.data.indexOf('pong:') === 0) {
         times.push(now() - parseFloat(ev.data.substr(5)));
-        i++;
-        if (i < total) { send(); } else { finish(); }
+        if (times.length < total) { ws.send('ping:' + now()); } else {
+          var sum = 0, max = 0;
+          for (var k = 0; k < times.length; k++) { sum += times[k]; if (times[k] > max) { max = times[k]; } }
+          var avg = sum / times.length;
+          R.bench.wsRttAvg_ms = round(avg, 1); R.bench.wsRttMax_ms = round(max, 1);
+          brow('WebSocket round trip', 'avg ' + round(avg, 1) + ' ms, max ' + round(max, 1) + ' ms', avg < 30 ? 'pass' : 'warn');
+          done();
+        }
       }
     };
-    function send() { ws.send('ping:' + now()); }
-    function finish() {
-      var sum = 0, max = 0;
-      for (var k = 0; k < times.length; k++) { sum += times[k]; if (times[k] > max) { max = times[k]; } }
-      var avg = sum / times.length;
-      R.bench.wsRttAvg_ms = round(avg, 1); R.bench.wsRttMax_ms = round(max, 1);
-      row('WebSocket round trip', 'avg ' + round(avg, 1) + ' ms, max ' + round(max, 1) + ' ms', avg < 30 ? 'pass' : 'warn');
-      done();
-    }
-    send();
+    ws.send('ping:' + now());
   }
 
   function testBulk(done) {
-    var total = 4 * 1024 * 1024, chunk = 65536, got = 0, t0 = now();
+    var total = 2 * 1024 * 1024, got = 0, t0 = now();
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string') {
         if (ev.data === 'bulk-done') {
-          var sec = (now() - t0) / 1000;
-          var mbps = got * 8 / sec / 1e6;
+          var sec = (now() - t0) / 1000, mbps = got * 8 / sec / 1e6;
           R.bench.wsThroughput_Mbit = round(mbps, 1);
-          row('WebSocket download 4 MB', round(mbps, 1) + ' Mbit/s (' + round(sec, 2) + ' s)', mbps > 20 ? 'pass' : 'warn');
+          brow('WebSocket download 2 MB', round(mbps, 1) + ' Mbit/s', mbps > 20 ? 'pass' : 'warn');
           done();
         }
         return;
       }
       got += ev.data.byteLength || ev.data.size || 0;
     };
-    ws.send('bulk:' + total + ':' + chunk);
+    ws.send('bulk:' + total + ':65536');
   }
 
-  // JPEG pipeline: request frame -> receive -> decode -> draw -> request next.
-  function testJpeg(size, w, h, done) {
-    var frames = 0, maxFrames = 60, t0 = 0, decodeSum = 0;
-    var c = document.createElement('canvas'); c.width = w; c.height = h; c.style.width = '480px';
+  // WS JPEG pipeline: request -> receive -> Blob -> <img> decode -> canvas draw -> next
+  function testWsJpeg(size, w, h, done) {
+    var frames = 0, maxFrames = 40, t0 = 0, decodeSum = 0;
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
     stage.innerHTML = ''; stage.appendChild(c);
     var ctx = c.getContext('2d');
-    var URLx = window.URL || window.webkitURL;
-    var useBitmap = R.features.createImageBitmap;
-
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string') { return; }
       var td = now();
-      var blob;
-      try { blob = new Blob([ev.data], { type: 'image/jpeg' }); } catch (e) { row('JPEG ' + size, 'Blob failed: ' + e, 'fail'); return done(); }
-      if (useBitmap) {
-        createImageBitmap(blob).then(function (bmp) { ctx.drawImage(bmp, 0, 0); if (bmp.close) { bmp.close(); } next(td); }, function () { useBitmap = false; next(td); });
-      } else {
-        var img = new Image();
-        var url = URLx.createObjectURL(blob);
-        img.onload = function () { ctx.drawImage(img, 0, 0); URLx.revokeObjectURL(url); next(td); };
-        img.onerror = function () { URLx.revokeObjectURL(url); row('JPEG ' + size, 'decode failed', 'fail'); done(); };
-        img.src = url;
-      }
+      var blob = (ev.data instanceof Blob) ? ev.data : new Blob([ev.data], { type: 'image/jpeg' });
+      var img = new Image();
+      var url = URLx.createObjectURL(blob);
+      img.onload = function () { ctx.drawImage(img, 0, 0); URLx.revokeObjectURL(url); next(td); };
+      img.onerror = function () { URLx.revokeObjectURL(url); brow('WS JPEG ' + w + '×' + h, 'decode failed', 'fail'); done(); };
+      img.src = url;
     };
     function next(td) {
       decodeSum += now() - td;
       frames++;
       if (frames === 1) { t0 = now(); }
-      if (frames < maxFrames) { ws.send('jpeg:' + size); } else { finish(); }
+      if (frames < maxFrames) { ws.send('jpeg:' + size + ':' + frames); } else {
+        var fps = (frames - 1) / ((now() - t0) / 1000), dec = decodeSum / frames;
+        R.bench['wsJpeg' + w + '_fps'] = round(fps, 1);
+        R.bench['wsJpeg' + w + '_decodeDraw_ms'] = round(dec, 1);
+        brow('WS JPEG ' + w + '×' + h, round(fps, 1) + ' fps, decode+draw ' + round(dec, 1) + ' ms', fps >= 15 ? 'pass' : (fps >= 8 ? 'warn' : 'fail'));
+        done();
+      }
     }
-    function finish() {
-      var sec = (now() - t0) / 1000;
-      var fps = (frames - 1) / sec;
-      var dec = decodeSum / frames;
-      R.bench['jpeg' + w + 'x' + h + '_fps'] = round(fps, 1);
-      R.bench['jpeg' + w + 'x' + h + '_decodeDraw_ms'] = round(dec, 1);
-      R.bench.jpegDecoder = useBitmap ? 'createImageBitmap' : 'Image+blobURL';
-      row('JPEG stream ' + w + '×' + h, round(fps, 1) + ' fps, decode+draw ' + round(dec, 1) + ' ms (' + R.bench.jpegDecoder + ')', fps >= 15 ? 'pass' : (fps >= 8 ? 'warn' : 'fail'));
-      done();
-    }
-    ws.send('jpeg:' + size);
+    ws.send('jpeg:' + size + ':0');
   }
 
-  // ---------- 5. MSE playback ----------
-  function testMse(file, codec, label, done) {
-    var MS = window.MediaSource || window.WebKitMediaSource;
-    if (!MS || !MS.isTypeSupported || !MS.isTypeSupported('video/mp4; codecs="' + codec + '"')) {
-      row('MSE play ' + label, 'skipped (type not supported)', 'fail');
-      R.bench['mse_' + label] = 'unsupported';
-      return done();
+  // MJPEG: <img src=multipart/x-mixed-replace>, decoded natively by the browser.
+  // The server sends 30 fps for 8 s; the page samples the image ~every 15 ms into a
+  // tiny canvas and counts how many *different* frames were actually shown.
+  function testMjpeg(size, w, done) {
+    var fpsTarget = 30, seconds = 8, n = fpsTarget * seconds;
+    var img = document.createElement('img');
+    var probe = document.createElement('canvas'); probe.width = 32; probe.height = 18;
+    var pctx = probe.getContext('2d');
+    stage.innerHTML = ''; stage.appendChild(img);
+    var changes = 0, samples = 0, last = '', first = 0, lastChange = 0, maxGap = 0, drawFail = 0;
+    var started = false, stopAt = 0;
+    img.onload = function () { if (!started) { started = true; first = now(); stopAt = first + (seconds - 1) * 1000; sample(); } };
+    img.onerror = function () { if (!started) { finish('img error'); } };
+    img.src = '/mjpeg?size=' + size + '&n=' + n + '&fps=' + fpsTarget + '&t=' + new Date().getTime();
+    var noStart = setTimeout(function () { if (!started) { finish('no frame loaded'); } }, 10000);
+    function sample() {
+      samples++;
+      try {
+        pctx.drawImage(img, 0, 0, 32, 18);
+        var d = pctx.getImageData(0, 0, 32, 18).data, sig = '';
+        for (var i = 0; i < d.length; i += 97) { sig += d[i] + ','; }
+        if (sig !== last) {
+          var t = now();
+          if (lastChange) { maxGap = Math.max(maxGap, t - lastChange); }
+          lastChange = t; changes++; last = sig;
+        }
+      } catch (e) { drawFail++; }
+      if (now() < stopAt) { setTimeout(sample, 15); } else { finish(null); }
     }
-    var v = document.createElement('video');
-    v.muted = true; v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.width = 480;
-    stage.innerHTML = ''; stage.appendChild(v);
-    var ms = new MS();
-    var URLx = window.URL || window.webkitURL;
-    v.src = URLx.createObjectURL(ms);
-    var finished = false;
-    var guard = setTimeout(function () { end('timeout'); }, 15000);
-
-    function end(err) {
-      if (finished) { return; }
-      finished = true; clearTimeout(guard);
-      var q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
-      var decoded = q ? q.totalVideoFrames : (v.webkitDecodedFrameCount || 0);
-      var dropped = q ? q.droppedVideoFrames : (v.webkitDroppedFrameCount || 0);
-      var played = v.currentTime || 0;
-      var fps = played > 0 ? decoded / played : 0;
-      R.bench['mse_' + label] = { error: err || null, played_s: round(played, 2), decoded: decoded, dropped: dropped, fps: round(fps, 1) };
-      row('MSE play ' + label, err ? ('fail: ' + err) : (round(fps, 1) + ' fps, dropped ' + dropped + ', played ' + round(played, 1) + ' s'), err ? 'fail' : (fps >= 25 && dropped < 15 ? 'pass' : 'warn'));
-      try { v.pause(); } catch (e) {}
-      done();
+    function finish(err) {
+      clearTimeout(noStart);
+      var sec = first ? (now() - first) / 1000 : 0;
+      var shown = sec > 0 ? changes / sec : 0;
+      var res = { error: err, targetFps: fpsTarget, shownFps: round(shown, 1), maxGap_ms: round(maxGap, 0), samples: samples, drawFail: drawFail };
+      R.bench['mjpeg' + w] = res;
+      var txt = err ? ('fail: ' + err) : (drawFail === samples ? 'plays, but cannot sample frames' : (round(shown, 1) + ' fps shown of ' + fpsTarget + ', worst gap ' + round(maxGap, 0) + ' ms'));
+      brow('MJPEG <img> ' + w, txt, err ? 'fail' : (shown >= 20 ? 'pass' : (shown >= 10 ? 'warn' : 'fail')));
+      img.onload = null; img.src = '';
+      setTimeout(done, 500);
     }
+  }
 
-    ms.addEventListener('sourceopen', function () {
-      var sb;
-      try { sb = ms.addSourceBuffer('video/mp4; codecs="' + codec + '"'); } catch (e) { return end('addSourceBuffer ' + e); }
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', 'assets/' + file, true);
-      xhr.responseType = 'arraybuffer';
-      xhr.onload = function () {
-        if (xhr.status !== 200) { return end('http ' + xhr.status); }
-        sb.addEventListener('updateend', function () {
-          try { if (ms.readyState === 'open') { ms.endOfStream(); } } catch (e) {}
-          var p = v.play();
-          if (p && p.then) { p.then(null, function (e) { end('play() ' + e); }); }
-          setTimeout(function () { end(null); }, 4500);
-        });
-        try { sb.appendBuffer(xhr.response); } catch (e) { end('appendBuffer ' + e); }
-      };
-      xhr.onerror = function () { end('xhr error'); };
-      xhr.send();
+  // ---------- 5. Audio (needs a tap) ----------
+  var audioQueue = [];
+  function askHeard(label, onAnswer) {
+    $('audioWhat').innerHTML = 'Чути «' + label + '»? · Did you hear "' + label + '"?';
+    $('audioAsk').className = '';
+    $('heardYes').onclick = function () { $('audioAsk').className = 'hidden'; onAnswer(true); };
+    $('heardNo').onclick = function () { $('audioAsk').className = 'hidden'; onAnswer(false); };
+  }
+  function playElement(file, label, next) {
+    var res = { events: [] };
+    R.audio[label] = res;
+    var a;
+    try { a = new Audio(); } catch (e) { res.error = String(e); arow(label, 'no Audio(): ' + e, 'fail'); return next(); }
+    ['loadedmetadata', 'canplay', 'playing', 'ended', 'error', 'stalled'].forEach(function (ev) {
+      a.addEventListener(ev, function () { res.events.push(ev); dump(); }, false);
+    });
+    a.src = 'assets/' + file;
+    try { var p = a.play(); if (p && p.then) { p.then(null, function (e) { res.playError = String(e); }); } } catch (e) { res.playError = String(e); }
+    setTimeout(function () {
+      askHeard(label, function (heard) {
+        res.heard = heard;
+        arow(label, (heard ? 'heard' : 'NOT heard') + ' · events: ' + (res.events.join(', ') || 'none') + (res.playError ? ' · ' + res.playError : ''), heard ? 'pass' : 'fail');
+        dump(); next();
+      });
+    }, 2500);
+  }
+  function playWebAudio(next) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { R.audio.webAudio = 'not available'; arow('Web Audio tone', 'not available', 'fail'); return next(); }
+    try {
+      var ctx = new AC(), sr = ctx.sampleRate, buf = ctx.createBuffer(2, sr, sr);
+      for (var ch = 0; ch < 2; ch++) { var d = buf.getChannelData(ch); for (var i = 0; i < sr; i++) { d[i] = 0.25 * Math.sin(2 * Math.PI * 440 * i / sr); } }
+      var src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+      if (ctx.resume) { ctx.resume(); }
+      if (src.start) { src.start(0); } else { src.noteOn(0); }
+      setTimeout(function () {
+        askHeard('Web Audio tone', function (heard) { R.audio.webAudio = { sampleRate: sr, heard: heard }; arow('Web Audio tone', heard ? 'heard' : 'NOT heard', yc(heard)); dump(); next(); });
+      }, 1500);
+    } catch (e) { R.audio.webAudio = { error: String(e) }; arow('Web Audio tone', 'error ' + e, 'fail'); next(); }
+  }
+  function testAudio() {
+    $('audioOut').innerHTML = '';
+    status('Звук: гучність у машині вгору · Audio: turn the car volume up');
+    playElement('tone.mp3', 'MP3 <audio>', function () {
+      playElement('tone.wav', 'WAV <audio>', function () {
+        playWebAudio(function () { status('Звук перевірено. Торкніться поля, потім «Надіслати». · Audio done. Touch the box, then Send.'); dump(); });
+      });
     });
   }
 
-  // ---------- 6. Audio (needs a tap) ----------
-  function testAudio() {
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) { R.audio.webAudio = false; row('Audio tone', 'no Web Audio', 'fail'); dump(); return; }
-    try {
-      var ctx = new AC();
-      R.audio.sampleRate = ctx.sampleRate;
-      var sr = ctx.sampleRate, len = sr; // 1 s of PCM, the same path the stream will use
-      var buf = ctx.createBuffer(2, len, sr);
-      for (var ch = 0; ch < 2; ch++) {
-        var data = buf.getChannelData(ch);
-        for (var i = 0; i < len; i++) { data[i] = 0.25 * Math.sin(2 * Math.PI * 440 * i / sr); }
-      }
-      var src = ctx.createBufferSource();
-      src.buffer = buf; src.connect(ctx.destination);
-      if (ctx.resume) { ctx.resume(); }
-      if (src.start) { src.start(0); } else { src.noteOn(0); }
-      R.audio.state = ctx.state || 'n/a';
-      row('Audio tone (PCM buffer)', 'played at ' + sr + ' Hz, state ' + R.audio.state, 'warn');
-      $('audioAsk').className = '';
-    } catch (e) {
-      R.audio.error = String(e);
-      row('Audio tone', 'error ' + e, 'fail');
-    }
-    dump();
-  }
-  $('heardYes').onclick = function () { R.audio.heard = true; $('audioAsk').className = 'hidden'; row('Audio heard', 'yes', 'pass'); dump(); };
-  $('heardNo').onclick = function () { R.audio.heard = false; $('audioAsk').className = 'hidden'; row('Audio heard', 'no', 'fail'); dump(); };
-
-  // ---------- 7. Touch ----------
+  // ---------- 6. Touch ----------
   (function setupTouch() {
     var el = $('touch');
-    R.touch = { touchstart: 0, pointerdown: 0, mousedown: 0, maxTouches: 0 };
-    function label() { el.innerHTML = 'touch ' + R.touch.touchstart + ' · pointer ' + R.touch.pointerdown + ' · mouse ' + R.touch.mousedown + ' · max fingers ' + R.touch.maxTouches; dump(); }
-    if (el.addEventListener) {
-      el.addEventListener('touchstart', function (e) { R.touch.touchstart++; if (e.touches && e.touches.length > R.touch.maxTouches) { R.touch.maxTouches = e.touches.length; } label(); e.preventDefault(); }, false);
-      el.addEventListener('pointerdown', function () { R.touch.pointerdown++; label(); }, false);
-      el.addEventListener('mousedown', function () { R.touch.mousedown++; label(); }, false);
-    }
+    R.touch = { touchstart: 0, touchmove: 0, pointerdown: 0, mousedown: 0, maxTouches: 0 };
+    function label() { el.innerHTML = 'touch ' + R.touch.touchstart + ' · move ' + R.touch.touchmove + ' · mouse ' + R.touch.mousedown + ' · max fingers ' + R.touch.maxTouches; dump(); }
+    el.addEventListener('touchstart', function (e) { R.touch.touchstart++; if (e.touches && e.touches.length > R.touch.maxTouches) { R.touch.maxTouches = e.touches.length; } label(); e.preventDefault(); }, false);
+    el.addEventListener('touchmove', function (e) { R.touch.touchmove++; if (R.touch.touchmove % 10 === 0) { label(); } e.preventDefault(); }, false);
+    el.addEventListener('pointerdown', function () { R.touch.pointerdown++; label(); }, false);
+    el.addEventListener('mousedown', function () { R.touch.mousedown++; label(); }, false);
   })();
 
-  // ---------- runner ----------
+  // ---------- runner: each step has a time limit ----------
   function series(steps, done) {
     var i = 0;
     function next() {
       if (i >= steps.length) { return done(); }
-      var s = steps[i++];
-      status('… ' + s[0]);
-      try { s[1](function () { dump(); setTimeout(next, 50); }); } catch (e) { row(s[0], 'error ' + e, 'fail'); setTimeout(next, 50); }
+      var s = steps[i++], finished = false, t0 = now();
+      status('… ' + s[0] + ' (' + i + '/' + steps.length + ')');
+      var guard = setTimeout(function () {
+        if (finished) { return; }
+        finished = true; R.errors[s[0]] = 'timeout ' + s[2] + ' s';
+        brow(s[0], 'timeout after ' + s[2] + ' s', 'fail'); dump(); setTimeout(next, 50);
+      }, s[2] * 1000);
+      function stepDone() {
+        if (finished) { return; }
+        finished = true; clearTimeout(guard);
+        R.bench['step_' + s[0] + '_s'] = round((now() - t0) / 1000, 1);
+        dump(); setTimeout(next, 100);
+      }
+      try { s[1](stepDone); } catch (e) { R.errors[s[0]] = String(e); brow(s[0], 'error ' + e, 'fail'); stepDone(); }
     }
     next();
   }
 
+  function needWs(fn) { return function (cb) { if (!R.bench.wsOk) { brow('(skipped)', 'no WebSocket', 'fail'); return cb(); } fn(cb); }; }
+
   function runAll() {
-    outEl.innerHTML = '';
-    tryRun('env', testEnv);
-    tryRun('media', testMedia);
-    dump();
+    $('benchOut').innerHTML = '';
+    R.bench = {}; R.errors = {};
     series([
-      ['Canvas', testCanvas],
-      ['WebSocket', function (cb) { openWs(function (ok) { R.bench.wsOk = ok; cb(); }); }],
-      ['WS ping', function (cb) { if (!R.bench.wsOk) { return cb(); } testPing(cb); }],
-      ['WS throughput', function (cb) { if (!R.bench.wsOk) { return cb(); } testBulk(cb); }],
-      ['JPEG 800×480', function (cb) { if (!R.bench.wsOk) { return cb(); } testJpeg('800', 800, 480, cb); }],
-      ['JPEG 1280×720', function (cb) { if (!R.bench.wsOk) { return cb(); } testJpeg('1280', 1280, 720, cb); }],
-      ['MSE baseline 576p', function (cb) { testMse('h264-baseline-576p30.mp4', 'avc1.42E01F', 'baseline576p', cb); }],
-      ['MSE main 720p', function (cb) { testMse('h264-main-720p30.mp4', 'avc1.4D401F', 'main720p', cb); }]
+      ['Canvas', testCanvas, 20],
+      ['WebSocket', openWs, 10],
+      ['WS ping', needWs(testPing), 20],
+      ['WS throughput', needWs(testBulk), 40],
+      ['WS JPEG 800', needWs(function (cb) { testWsJpeg('800', 800, 480, cb); }), 40],
+      ['WS JPEG 1280', needWs(function (cb) { testWsJpeg('1280', 1280, 720, cb); }), 40],
+      ['MJPEG 800', function (cb) { testMjpeg('800', 800, cb); }, 45],
+      ['MJPEG 1280', function (cb) { testMjpeg('1280', 1280, cb); }, 45]
     ], function () {
       stage.innerHTML = '';
-      status('Готово. Натисніть «Тест звуку», торкніться поля, потім «Надіслати». · Done. Run the audio test, touch the box, then Send.');
+      status('Готово. Далі «Тест звуку». · Done. Next: Audio test.');
       dump();
     });
   }

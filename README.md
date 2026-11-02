@@ -9,7 +9,7 @@ Targets: Tesla MCU1 (Tegra), MCU2 (Intel), MCU3 (Ryzen) · Android 13+ (tested o
 
 | Milestone | State |
 | --- | --- |
-| M0 · Browser capability probe | ready to test in the car → [docs/M0-probe.md](docs/M0-probe.md) |
+| M0 · Browser capability probe | M0.2 — features measured on MCU1, speed tests pending → [docs/M0-probe.md](docs/M0-probe.md) |
 | M1 · Core streaming | next, after M0 results |
 | M2 · Automation, UI, audio (MVP) | planned |
 | M3 · Phase 2 (anti-jamming, voice, extras) | planned |

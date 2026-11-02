@@ -37,7 +37,7 @@ import java.nio.ByteOrder
  * so delay stays at about one frame instead of growing (the 15 s seen with other apps).
  *
  * Protocol (WebSocket /ws)
- *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<auto 1|0>"   frame width, JPEG quality,
+ *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<auto 1|0>:<max fps, 0 = no cap>"   frame width, JPEG quality,
  *                 frames in flight, sub-rects ok (m = MJPEG view), adaptive resolution on/off
  *                 "full"                    car lost its picture (resized canvas): send a complete frame
  *                 "ack:<seq>:<decodeMs>:<drawMs>:<waitMs>:<shown>"   frame handled (shown=0: skipped, newer one queued)
@@ -100,6 +100,9 @@ class StreamService : Service(), CarServer.Listener {
     // MOTION_SCALE of the chosen width — MCU1 decode cost follows pixel count — and return to full
     // sharpness once the screen calms down.
     @Volatile private var autoRes = false
+    /** MJPEG frame cap (0 = none). Old WebKit may restart decoding on every new part and never paint
+     *  if parts arrive faster than it can draw; a cap leaves it time to show each frame. */
+    @Volatile private var maxFps = 20
     @Volatile private var motion = false
     private var motionStreak = 0
     private var calmSince = 0L
@@ -490,6 +493,11 @@ class StreamService : Service(), CarServer.Listener {
                     stDecode += 0
                 }
                 maybeStats()
+                val cap = maxFps
+                if (cap > 0) {
+                    val left = 1000L / cap - (SystemClock.uptimeMillis() - t0)
+                    if (left > 0) Thread.sleep(left)
+                }
             }
         } catch (_: Exception) {
         } finally {
@@ -537,6 +545,7 @@ class StreamService : Service(), CarServer.Listener {
                 p.getOrNull(3)?.toIntOrNull()?.let { window = it.coerceIn(1, 4) }
                 p.getOrNull(4)?.let { partialOk = it == "1"; mjpegMode = it == "m" }
                 forceFull = true
+                p.getOrNull(6)?.toIntOrNull()?.let { maxFps = it.coerceIn(0, 60) }
                 p.getOrNull(5)?.let { val a = it != "0"; if (a != autoRes) { autoRes = a; if (!a && motion) setMotion(false, SystemClock.uptimeMillis()) } }
                 p.getOrNull(1)?.toIntOrNull()?.let {
                     if (it != wantWidth) { wantWidth = it; motion = false; motionStreak = 0; lastResizeAt = SystemClock.uptimeMillis(); resize(it) }

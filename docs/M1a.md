@@ -123,6 +123,22 @@ stream (`↻N` counts restarts); the new ↻ bar button does the same by hand.
 How to read it: `upd` ≈ 0 % while moving → the phone captures a still screen (phone side);
 `upd` > 0 and `pic STUCK` → the car browser froze the stream (car side).
 
+## 0.4.6 — research-based MCU1 levers (2026-11-02)
+
+Research (TMC forums, Tesla Android release notes, other mirroring projects):
+- Every working MCU1 mirroring stack uses MJPEG-style frames — Tesla Android's single-board stack ran a
+  modified mjpg_streamer. H.264 in the browser needs WebCodecs/MSE/WASM (Castla, ws-scrcpy, tinyh264):
+  none exist on MCU1. So MJPEG is the ceiling; the remaining levers are pixels and painting.
+- QtWebKit honours `image-rendering` (WebKit bug 113405): optimizeSpeed / -webkit-optimize-contrast
+  select cheap nearest-neighbour scaling instead of smooth scaling in the software painter.
+- Old WebKit may keep restarting decode of a multipart image when parts arrive faster than it paints —
+  matches "fps 9 but the picture does not move".
+- MCU1 owners report a faster UI/browser with Data Sharing (Safety & Security) and Live Traffic off,
+  Dashcam/Sentry off, fewer map redraws, and a two-wheel reboot.
+
+Changes: ⚙ Scaling **Fast** (default, nearest neighbour) / Smooth; ⚙ **Max fps** 10/15/20/30/∞
+(default 20) — the phone spaces MJPEG parts so the browser can paint each one. cfg gained field 7.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

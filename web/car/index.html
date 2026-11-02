@@ -30,6 +30,9 @@
   #wrap { position: absolute; top: 65px; left: 0; right: 0; bottom: 0; overflow: hidden; }
   #screen { position: absolute; left: 0; top: 0; background: #050505; }
   .shot { position: absolute; display: none; }
+  /* Nearest-neighbour scaling: much cheaper for MCU1's software painter than smooth (bilinear) scaling.
+     Old WebKit drops the values it does not know, so the last one it understands wins. */
+  .fast #mj, .fast .shot, .fast #screen { image-rendering: optimizeSpeed; image-rendering: -webkit-optimize-contrast; image-rendering: pixelated; }
   #msg { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 26px; color: #888; }
   .dot { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 18px; background: rgba(42,111,219,0.6); pointer-events: none; }
   #panel { position: absolute; top: 72px; left: 8px; right: 8px; background: #1b1b1b; border: 1px solid #333; border-radius: 10px; padding: 12px 14px; display: none; }
@@ -49,7 +52,7 @@
   <button id="bSet">⚙</button>
   <button id="bRe">↻</button>
   <div id="stats">…</div>
-  <div id="ver">v0.4.5</div>
+  <div id="ver">v0.4.6</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
@@ -58,6 +61,8 @@
   <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
   <div class="row"><div class="lbl">Кадрів у дорозі · Frames in flight</div><div id="optN"></div></div>
   <div class="row"><div class="lbl">Авто-роздільність у русі · Auto resolution in motion</div><div id="optA"></div></div>
+  <div class="row"><div class="lbl">Масштабування · Scaling</div><div id="optS"></div></div>
+  <div class="row"><div class="lbl">Макс. кадрів/с (mjpeg) · Max fps (mjpeg)</div><div id="optF"></div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
     <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
   <button id="bClose">✕ Закрити · Close</button>
@@ -94,22 +99,27 @@
     q: ['25', '35', '50', '65'],
     n: ['1', '2', '3'],
     a: ['1', '0'],
-    v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img']
+    v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img'],
+    s: ['fast', 'smooth'],
+    f: ['10', '15', '20', '30', '0']
   };
   var set = {
     w: param('w') || load('w', '432'),
     q: param('q') || load('q', '35'),
     n: param('n') || load('n', '2'),
     a: param('auto') || load('a2', '0'),       // Auto resolution: off by default (resizing caused stutter)
-    v: param('mode') || load('v', 'mjpeg')
+    v: param('mode') || load('v', 'mjpeg'),
+    s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
+    f: param('fps') || load('f', '20')          // MJPEG frame cap; 0 = none
   };
+  function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
   var mj = document.getElementById('mj'), mjOn = false;
   function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
   var frameW = 0, frameH = 0;
 
   function sendCfg() {
-    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + set.a); }
+    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + set.a + ':' + set.f); }
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
@@ -150,6 +160,7 @@
     if (set[key] === val) { return; }
     set[key] = val; store(key === 'a' ? 'a2' : key, val); markOptions();
     if (key === 'v') { layout(); }
+    if (key === 's') { applyScaling(); return; }
     sendCfg();
   }
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
@@ -157,7 +168,9 @@
   buildOptions('n', 'optN', function (v) { return '×' + v; });
   buildOptions('a', 'optA', function (v) { return v === '1' ? 'Auto ✓' : 'Off'; });
   buildOptions('v', 'optV', function (v) { return v; });
-  markOptions();
+  buildOptions('s', 'optS', function (v) { return v === 'fast' ? 'Швидко · Fast' : 'Гладко · Smooth'; });
+  buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v; });
+  markOptions(); applyScaling();
   var panelOpen = false;
   function showPanel(open) { panelOpen = open; panel.style.display = open ? 'block' : 'none'; }
   onTap(document.getElementById('bSet'), function () { showPanel(!panelOpen); }, 1000);

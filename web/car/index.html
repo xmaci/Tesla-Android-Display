@@ -5,21 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TeslaDroid</title>
 <!--
-  M1a car client. Plain ES5 for the MCU1 browser (QtCarBrowser / WebKit 601).
-  Up to N frames in flight (window). Frames are decoded one at a time; if newer ones are
-  already waiting, older ones are skipped (acked as not shown) so the car always shows the newest.
+  Car client, plain ES5 for the MCU1 browser (QtCarBrowser / WebKit 601).
+
+  Frames: 20-byte header (seq, frame w/h, enc ms, quality, rect x/y/w/h) + JPEG of that rect.
+  Partial frames update only the changed rectangle, so they must all be drawn in order; only
+  frames older than a queued *full* frame may be skipped.
+
+  Views (Settings → View):
+    gpu  canvas at frame size, scaled by a CSS transform (may be composited on the GPU)
+    draw canvas at on-screen size, drawImage scales each update
+    fit  canvas at frame size, CSS width/height scaling (slow on MCU1 — kept for comparison)
+    1:1  no scaling
+    img  two <img> elements, no canvas (full frames only)
 -->
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: Arial, Helvetica, sans-serif; overflow: hidden; }
-  #bar { height: 64px; display: flex; align-items: center; background: #161616; border-bottom: 1px solid #2a2a2a; padding: 0 8px; }
-  #bar button { font-size: 22px; min-width: 64px; height: 52px; margin-right: 8px; background: #2b2b2b; color: #eee; border: 0; border-radius: 8px; }
-  #bar button.opt { min-width: 86px; font-size: 20px; background: #20324f; }
-  #stats { flex: 1; text-align: right; font-size: 15px; line-height: 19px; color: #9a9a9a; white-space: nowrap; overflow: hidden; }
-  #wrap { position: absolute; top: 65px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  #screen { background: #050505; display: block; }
+  #bar { position: absolute; top: 0; left: 0; right: 0; height: 64px; display: flex; align-items: center; background: #161616; border-bottom: 1px solid #2a2a2a; padding: 0 8px; }
+  #bar button { font-size: 24px; min-width: 70px; height: 52px; margin-right: 8px; background: #2b2b2b; color: #eee; border: 0; border-radius: 8px; }
+  #bSet { background: #20324f !important; }
+  #stats { flex: 1; text-align: right; font-size: 14px; line-height: 18px; color: #9a9a9a; white-space: nowrap; overflow: hidden; }
+  #ver { font-size: 12px; color: #666; margin-left: 8px; }
+  #wrap { position: absolute; top: 65px; left: 0; right: 0; bottom: 0; overflow: hidden; }
+  #screen { position: absolute; left: 0; top: 0; background: #050505; }
   .shot { position: absolute; display: none; }
   #msg { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 26px; color: #888; }
   .dot { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 18px; background: rgba(42,111,219,0.6); pointer-events: none; }
+  #panel { position: absolute; top: 72px; left: 8px; right: 8px; background: #1b1b1b; border: 1px solid #333; border-radius: 10px; padding: 12px 14px; display: none; }
+  #panel .row { margin: 6px 0 14px; }
+  #panel .lbl { font-size: 18px; color: #aaa; margin-bottom: 6px; }
+  #panel button { font-size: 22px; min-width: 96px; height: 54px; margin: 0 8px 8px 0; background: #2b2b2b; color: #eee; border: 2px solid #2b2b2b; border-radius: 8px; }
+  #panel button.on { background: #2a6fdb; border-color: #8fb4ff; }
+  #panel .hint { font-size: 15px; color: #888; }
 </style>
 </head>
 <body>
@@ -28,15 +44,20 @@
   <button id="kHome">●</button>
   <button id="kRecents">▢</button>
   <button id="kNotif">☰</button>
-  <button id="bW" class="opt">432px</button>
-  <button id="bQ" class="opt">q50</button>
-  <button id="bN" class="opt">×2</button>
-  <button id="bF" class="opt">fit</button>
+  <button id="bSet">⚙</button>
   <div id="stats">…</div>
-  <div id="ver" style="font-size:12px;color:#666;margin-left:8px">v0.3.5</div>
+  <div id="ver">v0.4.0</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
+<div id="panel">
+  <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div></div>
+  <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
+  <div class="row"><div class="lbl">Кадрів у дорозі · Frames in flight</div><div id="optN"></div></div>
+  <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
+    <div class="hint">gpu = великий і швидкий (тест) · draw · fit = старий повільний · 1:1 = малий найшвидший · img</div></div>
+  <button id="bClose">✕ Закрити · Close</button>
+</div>
 
 <script>
 (function () {
@@ -47,71 +68,127 @@
   var wrap = document.getElementById('wrap');
   var msg = document.getElementById('msg');
   var statsEl = document.getElementById('stats');
+  var panel = document.getElementById('panel');
+  var shots = [document.getElementById('shotA'), document.getElementById('shotB')], front = 0, shotUrls = [null, null];
   var URLx = window.URL || window.webkitURL;
   var ws = null, retry = null;
-  var frames = 0, lastFpsT = now(), localFps = 0, lastDecode = 0;
-  var server = {};
+  var frames = 0, lastFpsT = now(), localFps = 0;
+  var lastDecode = 0, lastDraw = 0, server = {};
+  var touchSent = 0, touchOk = 0, touchFail = 0, touchNoSvc = 0;
 
   function now() { return (window.performance && performance.now) ? performance.now() : new Date().getTime(); }
-  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
-  function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
-
-  // Width / quality: tap to cycle (MCU1 cannot open <select> menus).
-  // The URL can also set them: /?w=320&q=35
-  var WIDTHS = ['240', '320', '432', '540', '720'], QUALS = ['25', '35', '50', '65'], WINS = ['1', '2', '3'];
+  function store(k, v) { try { localStorage.setItem('td4_' + k, v); } catch (e) {} }
+  function load(k, d) { try { return localStorage.getItem('td4_' + k) || d; } catch (e) { return d; } }
   function param(name) {
     var m = new RegExp('[?&]' + name + '=([a-z0-9:]+)').exec(location.search);
     return m ? m[1] : null;
   }
-  var curW = param('w') || load('td_w', '432');
-  var curQ = param('q') || load('td_q', '50');
-  var curN = param('n') || load('td_n', '2');
-  // Scale mode: 'draw' = canvas has the on-screen size and drawImage scales (no CSS stretch),
-  // 'fit' = CSS stretches a frame-sized canvas (slow on MCU1), '1:1' = no scaling at all.
-  // 'img' = no canvas: two <img> elements, browser decodes and scales natively.
-  var MODES = ['draw', 'fit', '1:1', 'img'];
-  var shots = [document.getElementById('shotA'), document.getElementById('shotB')], front = 0;
-  var shotUrls = [null, null];
-  var mode = param('mode') || load('td_mode', 'draw');
-  if (MODES.indexOf(mode) < 0) { mode = 'draw'; }
-  var frameW = 0, frameH = 0;
-  var bW = document.getElementById('bW'), bQ = document.getElementById('bQ');
-  var bN = document.getElementById('bN'), bF = document.getElementById('bF');
-  function labels() { bW.innerHTML = curW + 'px'; bQ.innerHTML = 'q' + curQ; bN.innerHTML = '×' + curN; bF.innerHTML = mode; }
-  function next(list, v) { var i = list.indexOf(v); return list[(i + 1) % list.length]; }
-  function sendCfg() { if (ws && ws.readyState === 1) { ws.send('cfg:' + curW + ':' + curQ + ':' + curN); } }
-  var cycleW = function () { curW = next(WIDTHS, curW); store('td_w', curW); labels(); sendCfg(); };
-  var cycleQ = function () { curQ = next(QUALS, curQ); store('td_q', curQ); labels(); sendCfg(); };
-  var cycleN = function () { curN = next(WINS, curN); store('td_n', curN); labels(); sendCfg(); };
-  var cycleF = function () { mode = next(MODES, mode); store('td_mode', mode); labels(); setTimeout(fit, 0); };
-  labels();
 
-  // ---- layout: fit the frame into the area below the bar, keep aspect ----
-  function fit() {
-    var aw = wrap.clientWidth, ah = wrap.clientHeight;
-    var fw = frameW || canvas.width, fh = frameH || canvas.height;
-    var sc = Math.min(aw / fw, ah / fh);
-    var cw, ch;
-    if (mode === '1:1') { cw = fw; ch = fh; }
-    else { cw = Math.floor(fw * sc); ch = Math.floor(fh * sc); }
-    if (mode === 'fit') {
-      if (canvas.width !== fw || canvas.height !== fh) { canvas.width = fw; canvas.height = fh; }
-    } else if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
-    canvas.style.width = cw + 'px';
-    canvas.style.height = ch + 'px';
-    var useImg = mode === 'img';
-    canvas.style.display = useImg ? 'none' : 'block';
-    for (var i = 0; i < 2; i++) {
-      var sh = shots[i];
-      sh.style.width = Math.floor(fw * sc) + 'px';
-      sh.style.height = Math.floor(fh * sc) + 'px';
-      sh.style.left = Math.floor((aw - fw * sc) / 2) + 'px';
-      sh.style.top = Math.floor((ah - fh * sc) / 2) + 'px';
-      if (!useImg) { sh.style.display = 'none'; }
+  // ---- settings ----
+  var OPT = {
+    w: ['320', '432', '540', '720'],
+    q: ['25', '35', '50', '65'],
+    n: ['1', '2', '3'],
+    v: ['gpu', 'draw', 'fit', '1:1', 'img']
+  };
+  var set = {
+    w: param('w') || load('w', '432'),
+    q: param('q') || load('q', '35'),
+    n: param('n') || load('n', '2'),
+    v: param('mode') || load('v', 'gpu')
+  };
+  if (OPT.v.indexOf(set.v) < 0) { set.v = 'gpu'; }
+  var frameW = 0, frameH = 0;
+
+  function sendCfg() {
+    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (set.v === 'img' ? '0' : '1')); }
+  }
+  function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
+
+  // One action per real tap. MCU1 delivers a tap as touchend + emulated click (sometimes late).
+  function onTap(el, fn, gapMs) {
+    var last = -10000;
+    function fire(e) {
+      if (e) { e.preventDefault(); }
+      var n = now();
+      if (n - last < gapMs) { return; }
+      last = n; fn();
+    }
+    el.addEventListener('touchend', fire, false);
+    el.addEventListener('click', fire, false);
+  }
+
+  // Option buttons *select* a value (not cycle), so a duplicated event changes nothing.
+  function buildOptions(key, boxId, labelFn) {
+    var box = document.getElementById(boxId), list = OPT[key];
+    for (var i = 0; i < list.length; i++) {
+      (function (val) {
+        var b = document.createElement('button');
+        b.innerHTML = labelFn(val);
+        b.setAttribute('data-k', key); b.setAttribute('data-v', val);
+        onTap(b, function () { choose(key, val); }, 300);
+        box.appendChild(b);
+      })(list[i]);
     }
   }
-  window.onresize = fit;
-  fit();
+  function markOptions() {
+    var bs = panel.getElementsByTagName('button');
+    for (var i = 0; i < bs.length; i++) {
+      var k = bs[i].getAttribute('data-k');
+      if (k) { bs[i].className = (set[k] === bs[i].getAttribute('data-v')) ? 'on' : ''; }
+    }
+  }
+  function choose(key, val) {
+    if (set[key] === val) { return; }
+    set[key] = val; store(key, val); markOptions();
+    if (key === 'v') { layout(); }
+    sendCfg();
+  }
+  buildOptions('w', 'optW', function (v) { return v + 'px'; });
+  buildOptions('q', 'optQ', function (v) { return 'q' + v; });
+  buildOptions('n', 'optN', function (v) { return '×' + v; });
+  buildOptions('v', 'optV', function (v) { return v; });
+  markOptions();
+  var panelOpen = false;
+  function showPanel(open) { panelOpen = open; panel.style.display = open ? 'block' : 'none'; }
+  onTap(document.getElementById('bSet'), function () { showPanel(!panelOpen); }, 1000);
+  onTap(document.getElementById('bClose'), function () { showPanel(false); }, 500);
+
+  // ---- layout: place the picture for the current view ----
+  function setTransform(el, t) {
+    el.style.webkitTransformOrigin = '0 0'; el.style.transformOrigin = '0 0';
+    el.style.webkitTransform = t; el.style.transform = t;
+  }
+  function layout() {
+    var aw = wrap.clientWidth, ah = wrap.clientHeight;
+    var fw = frameW || 432, fh = frameH || 960;
+    var sc = Math.min(aw / fw, ah / fh);
+    var v = set.v, cw, ch, dispW, dispH, oldW = canvas.width, oldH = canvas.height;
+    if (v === '1:1') { sc = 1; }
+    dispW = Math.floor(fw * sc); dispH = Math.floor(fh * sc);
+    if (v === 'draw') { cw = dispW; ch = dispH; } else { cw = fw; ch = fh; }
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    var left = Math.floor((aw - dispW) / 2), top = Math.floor((ah - dispH) / 2);
+    canvas.style.left = left + 'px'; canvas.style.top = top + 'px';
+    if (v === 'gpu') {
+      canvas.style.width = fw + 'px'; canvas.style.height = fh + 'px';
+      setTransform(canvas, 'translateZ(0) scale(' + sc + ')');
+    } else {
+      canvas.style.width = dispW + 'px'; canvas.style.height = dispH + 'px';
+      setTransform(canvas, 'none');
+    }
+    canvas.style.display = v === 'img' ? 'none' : 'block';
+    for (var i = 0; i < 2; i++) {
+      var s = shots[i];
+      s.style.width = dispW + 'px'; s.style.height = dispH + 'px';
+      s.style.left = left + 'px'; s.style.top = top + 'px';
+      if (v !== 'img') { s.style.display = 'none'; }
+    }
+    // A resized canvas is blank: ask the phone for a complete frame.
+    if (canvas.width !== oldW || canvas.height !== oldH || v === 'img') { askFull(); }
+  }
+  window.onresize = layout;
+  layout();
 
   // ---- connection ----
   function connect() {
@@ -125,64 +202,75 @@
   }
   function schedule() { if (!retry) { retry = setTimeout(connect, 1500); } }
 
-  // ---- frames: decode one at a time, always the newest ----
-  var queue = [], busy = false, lastDraw = 0, lastWait = 0;
+  // ---- frames ----
+  var queue = [], busy = false;
   function onMessage(ev) {
     if (typeof ev.data === 'string') {
-      if (ev.data.indexOf('s:') === 0) { try { server = JSON.parse(ev.data.substr(2)); } catch (e) {} showStats(); }
+      var d = ev.data;
+      if (d.indexOf('s:') === 0) { try { server = JSON.parse(d.substr(2)); } catch (e) {} showStats(); }
+      else if (d.indexOf('ti:') === 0) {
+        var r = d.substr(3);
+        if (r === '1') { touchOk++; } else if (r === 'x') { touchNoSvc++; } else { touchFail++; }
+        showStats();
+      }
       return;
     }
-    queue.push({ buf: ev.data, t: now() });
+    var dv = new DataView(ev.data);
+    queue.push({
+      buf: ev.data, t: now(), seq: dv.getUint32(0), fw: dv.getUint16(4), fh: dv.getUint16(6),
+      x: dv.getUint16(12), y: dv.getUint16(14), rw: dv.getUint16(16), rh: dv.getUint16(18)
+    });
     pump();
   }
-  function seqOf(buf) { return new DataView(buf).getUint32(0); }
+  function isFull(f) { return f.x === 0 && f.y === 0 && f.rw === f.fw && f.rh === f.fh; }
   function pump() {
     if (busy || !queue.length) { return; }
-    while (queue.length > 1) { ack(seqOf(queue.shift().buf), 0, 0, 0, 0); }   // stale: skipped
+    // Partial frames build on each other: only frames older than a queued full frame can be dropped.
+    var lastFull = -1;
+    for (var i = queue.length - 1; i > 0; i--) { if (isFull(queue[i])) { lastFull = i; break; } }
+    while (lastFull > 0) { ack(queue.shift().seq, 0, 0, 0, 0); lastFull--; }
     var f = queue.shift();
     busy = true;
-    var buf = f.buf, dv = new DataView(buf);
-    var seq = dv.getUint32(0), w = dv.getUint16(4), h = dv.getUint16(6);
     var t0 = now(), wait = Math.round(t0 - f.t);
-    var url = URLx.createObjectURL(new Blob([buf.slice(12)], { type: 'image/jpeg' }));
-    if (mode === 'img') { showImg(seq, w, h, url, t0, wait); return; }
+    var url = URLx.createObjectURL(new Blob([f.buf.slice(20)], { type: 'image/jpeg' }));
+    if (set.v === 'img') { showImg(f, url, t0, wait); return; }
     var img = new Image();
     img.onload = function () {
       var t1 = now();
-      if (frameW !== w || frameH !== h) { frameW = w; frameH = h; fit(); }
-      if (mode === 'draw') { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); }
-      else { ctx.drawImage(img, 0, 0); }
+      if (frameW !== f.fw || frameH !== f.fh) { frameW = f.fw; frameH = f.fh; layout(); }
+      if (set.v === 'draw') {
+        var sx = canvas.width / f.fw, sy = canvas.height / f.fh;
+        var dx = Math.floor(f.x * sx), dy = Math.floor(f.y * sy);
+        ctx.drawImage(img, dx, dy, Math.ceil((f.x + f.rw) * sx) - dx, Math.ceil((f.y + f.rh) * sy) - dy);
+      } else {
+        ctx.drawImage(img, f.x, f.y);
+      }
       var t2 = now();
       URLx.revokeObjectURL(url);
-      lastDecode = Math.round(t1 - t0); lastDraw = Math.round(t2 - t1); lastWait = wait;
-      ack(seq, lastDecode, lastDraw, wait, 1);
-      frames++;
-      busy = false; pump();
+      done(f, Math.round(t1 - t0), Math.round(t2 - t1), wait);
     };
-    img.onerror = function () { URLx.revokeObjectURL(url); ack(seq, 0, 0, 0, 0); busy = false; pump(); };
+    img.onerror = function () { URLx.revokeObjectURL(url); ack(f.seq, 0, 0, 0, 0); askFull(); busy = false; pump(); };
     img.src = url;
   }
-  // <img> path: load into the hidden element, then swap. "dec" = load time, "draw" = swap time.
-  function showImg(seq, w, h, url, t0, wait) {
+  function showImg(f, url, t0, wait) {
     var back = 1 - front, el = shots[back];
     el.onload = function () {
       var t1 = now();
-      if (frameW !== w || frameH !== h) { frameW = w; frameH = h; fit(); }
-      el.style.display = 'block';
-      shots[front].style.display = 'none';
+      if (frameW !== f.fw || frameH !== f.fh) { frameW = f.fw; frameH = f.fh; layout(); }
+      el.style.display = 'block'; shots[front].style.display = 'none';
       if (shotUrls[front]) { URLx.revokeObjectURL(shotUrls[front]); }
-      shotUrls[back] = url;
-      front = back;
-      var t2 = now();
-      lastDecode = Math.round(t1 - t0); lastDraw = Math.round(t2 - t1); lastWait = wait;
-      ack(seq, lastDecode, lastDraw, wait, 1);
-      frames++;
-      busy = false; pump();
+      shotUrls[back] = url; front = back;
+      done(f, Math.round(t1 - t0), Math.round(now() - t1), wait);
     };
-    el.onerror = function () { URLx.revokeObjectURL(url); ack(seq, 0, 0, 0, 0); busy = false; pump(); };
+    el.onerror = function () { URLx.revokeObjectURL(url); ack(f.seq, 0, 0, 0, 0); busy = false; pump(); };
     el.src = url;
   }
-
+  function done(f, dec, draw, wait) {
+    lastDecode = dec; lastDraw = draw;
+    ack(f.seq, dec, draw, wait, 1);
+    frames++;
+    busy = false; pump();
+  }
   function ack(seq, dec, draw, wait, shown) {
     if (ws && ws.readyState === 1) { ws.send('ack:' + seq + ':' + dec + ':' + draw + ':' + wait + ':' + shown); }
   }
@@ -190,18 +278,18 @@
   function showStats() {
     var t = now();
     if (t - lastFpsT >= 1000) { localFps = frames * 1000 / (t - lastFpsT); frames = 0; lastFpsT = t; }
+    var touch = server.touch === false ? 'touch OFF' :
+      ('touch ' + touchSent + '→' + touchOk + (touchFail ? ' ✗' + touchFail : '') + (touchNoSvc ? ' no-svc' + touchNoSvc : ''));
     statsEl.innerHTML = (Math.round(localFps * 10) / 10) + ' fps · ' + (server.lat || 0) + ' ms · ' +
-      (server.kb || 0) + ' KB · ' + (server.w || canvas.width) + '×' + (server.h || canvas.height) +
-      (server.touch ? '' : ' · touch off') + '<br>' +
+      (server.kb || 0) + ' KB · upd ' + (server.area || 0) + '% · ' + (server.w || frameW) + '×' + (server.h || frameH) +
+      ' · ' + set.v + '<br>' +
       'enc ' + (server.enc || 0) + ' · net ' + (server.net || 0) + ' · wait ' + (server.wait || 0) +
-      ' · dec ' + (server.dec || 0) + ' · draw ' + (server.draw || 0) + ' ms';
+      ' · dec ' + (server.dec || 0) + ' · draw ' + (server.draw || 0) + ' ms · ' + touch;
   }
 
-  // ---- touch: normalised 0..1 coordinates, moves throttled to ~20/s ----
-  // Listen on the whole picture area (#wrap) and map to whichever element shows the frame
-  // (canvas, or the front <img> in 'img' mode — the canvas is hidden there).
+  // ---- touch on the picture ----
   var lastMove = 0, lastTouchT = 0, touching = false;
-  function picture() { return mode === 'img' ? shots[front] : canvas; }
+  function picture() { return set.v === 'img' ? shots[front] : canvas; }
   function pos(clientX, clientY) {
     var r = picture().getBoundingClientRect();
     if (!r.width || !r.height) { return null; }
@@ -219,35 +307,34 @@
     setTimeout(function () { if (d.parentNode) { d.parentNode.removeChild(d); } }, 350);
   }
   wrap.addEventListener('touchstart', function (e) {
-    lastTouchT = now();
+    lastTouchT = now(); e.preventDefault();
+    if (panelOpen) { showPanel(false); return; }
     var t = e.changedTouches[0], p = pos(t.clientX, t.clientY);
-    e.preventDefault();
-    if (!p || !p.inside) { return; }          // tap on the black border: ignore
+    if (!p || !p.inside) { return; }
     touching = true; sendTouch('d', p); dot(p);
   }, false);
   wrap.addEventListener('touchmove', function (e) {
-    lastTouchT = now();
-    e.preventDefault();
+    lastTouchT = now(); e.preventDefault();
     if (!touching) { return; }
     var t = e.changedTouches[0], n = now();
     if (n - lastMove > 50) { lastMove = n; sendTouch('m', pos(t.clientX, t.clientY)); }
   }, false);
   function touchEnd(e) {
-    lastTouchT = now();
-    e.preventDefault();
+    lastTouchT = now(); e.preventDefault();
     if (!touching) { return; }
-    touching = false;
+    touching = false; touchSent++;
     var t = e.changedTouches[0];
     sendTouch('u', pos(t.clientX, t.clientY));
+    showStats();
   }
   wrap.addEventListener('touchend', touchEnd, false);
   wrap.addEventListener('touchcancel', touchEnd, false);
-  // Mouse fallback (desktop testing). Ignored right after a touch: old WebKit also
-  // fires emulated mouse events for every tap.
+  // Mouse (desktop testing); ignored right after a touch (emulated mouse events).
   var mouseDown = false;
   function fromTouch() { return now() - lastTouchT < 800; }
   wrap.addEventListener('mousedown', function (e) {
     if (fromTouch()) { return; }
+    if (panelOpen) { showPanel(false); return; }
     var p = pos(e.clientX, e.clientY);
     if (!p || !p.inside) { return; }
     mouseDown = true; sendTouch('d', p); dot(p);
@@ -257,32 +344,14 @@
     var n = now(); if (n - lastMove > 50) { lastMove = n; sendTouch('m', pos(e.clientX, e.clientY)); }
   }, false);
   window.addEventListener('mouseup', function (e) {
-    if (!mouseDown) { return; } mouseDown = false; sendTouch('u', pos(e.clientX, e.clientY));
+    if (!mouseDown) { return; } mouseDown = false; touchSent++; sendTouch('u', pos(e.clientX, e.clientY));
   }, false);
 
-  // ---- bar buttons: one action per tap. MCU1 fires touch + emulated click for one tap,
-  // so act on touchend and swallow the click that follows; plain click still works on desktop.
-  function onTap(el, fn) {
-    // MCU1 can deliver one tap as touchend + one or more emulated clicks, sometimes much later.
-    // Rule: a button acts at most once per second, whatever event arrives.
-    var last = -10000;
-    function fire(e) {
-      if (e) { e.preventDefault(); }
-      var n = now();
-      if (n - last < 1000) { return; }
-      last = n;
-      fn();
-    }
-    el.addEventListener('touchend', fire, false);
-    el.addEventListener('click', fire, false);
-  }
   function key(name) { return function () { if (ws && ws.readyState === 1) { ws.send('k:' + name); } }; }
-  onTap(document.getElementById('kBack'), key('back'));
-  onTap(document.getElementById('kHome'), key('home'));
-  onTap(document.getElementById('kRecents'), key('recents'));
-  onTap(document.getElementById('kNotif'), key('notifications'));
-
-  onTap(bW, cycleW); onTap(bQ, cycleQ); onTap(bN, cycleN); onTap(bF, cycleF);
+  onTap(document.getElementById('kBack'), key('back'), 600);
+  onTap(document.getElementById('kHome'), key('home'), 600);
+  onTap(document.getElementById('kRecents'), key('recents'), 600);
+  onTap(document.getElementById('kNotif'), key('notifications'), 600);
 
   setInterval(showStats, 1000);
   connect();

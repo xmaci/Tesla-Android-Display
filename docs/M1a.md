@@ -64,6 +64,18 @@ on screen ≈ 13 fps, ~850k px ≈ 4 fps. 0.2.2 adds mode `img` (two `<img>` ele
 same ceiling. **Decision for MCU1:** render apps on a car-shaped virtual display and show it 1:1
 (~400k px ≈ 8–10 fps); offer a "large" stretched view (~4–5 fps) as an option.
 
+## 0.4.0 — partial updates, GPU view, settings panel
+
+- **Partial updates:** the phone diffs each capture against what the car already shows (32 px tiles,
+  `FrameDiff`) and sends only the changed rectangle; nothing at all when the screen is static. Full frame
+  when >60 % changed, on resize/connect/`full` request, and every 6 s. Header grew to 20 bytes (+ rect).
+  The car draws partial frames in order; only frames older than a queued full frame are skipped.
+- **View `gpu` (default):** canvas at frame size, scaled with `translateZ(0) scale(s)` — tests whether MCU1
+  composites the scale on the GPU instead of the slow software stretch measured for `fit`.
+- **⚙ settings panel** replaces the cycling buttons: options are *selected*, so MCU1's duplicated tap events
+  can no longer skip a value. Bar buttons accept one action per 0.6–1 s.
+- **Touch diagnostics:** the phone answers every gesture with `ti:1|0|x`; the bar shows `touch sent→ok`.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

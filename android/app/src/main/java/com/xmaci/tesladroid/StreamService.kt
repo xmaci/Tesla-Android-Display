@@ -37,11 +37,14 @@ import java.nio.ByteOrder
  * so delay stays at about one frame instead of growing (the 15 s seen with other apps).
  *
  * Protocol (WebSocket /ws)
- *   car -> phone  "cfg:<width>:<quality>:<window>"   frame width (px), JPEG quality, frames in flight (1-4)
+ *   car -> phone  "cfg:<width>:<quality>:<window>:<partial>"   frame width, JPEG quality, frames in flight, sub-rects ok
+ *                 "full"                    car lost its picture (resized canvas): send a complete frame
  *                 "ack:<seq>:<decodeMs>:<drawMs>:<waitMs>:<shown>"   frame handled (shown=0: skipped, newer one queued)
  *                 "t:<d|m|u>:<x>:<y>"       touch, x/y normalised 0..1
  *                 "k:<back|home|recents|notifications>"
- *   phone -> car  binary: 12-byte header (seq u32, w u16, h u16, encMs u16, q u16) + JPEG
+ *   phone -> car  binary: 20-byte header (seq u32, frame w,h u16, encMs u16, q u16, rect x,y,w,h u16) + JPEG
+ *                 of that rectangle only (partial update) or of the whole frame
+ *                 "ti:<1|0|x>" touch injected / failed / no touch service
  *                 "s:{json}" stats once per second
  */
 class StreamService : Service(), CarServer.Listener {
@@ -108,6 +111,15 @@ class StreamService : Service(), CarServer.Listener {
     @Volatile private var window = 2
     private var sendSeq = 0L
 
+    // Partial updates: what the car currently shows (pixels of everything sent so far)
+    @Volatile private var partialOk = true          // car can draw sub-rectangles (not in 'img' mode)
+    @Volatile private var forceFull = true          // next frame must be complete (connect, resize, car request)
+    private var shown: IntArray? = null             // car-side picture, frameW*frameH
+    private var spare: IntArray? = null             // reused buffer for the next capture
+    private var shownW = 0
+    private var shownH = 0
+    private var lastFullAt = 0L
+
     // Stats (reset each second)
     private var stFrames = 0
     private var stBytes = 0L
@@ -117,7 +129,12 @@ class StreamService : Service(), CarServer.Listener {
     private var stDraw = 0L
     private var stWait = 0L
     private var stCaptured = 0
+    private var stArea = 0L          // sum of sent area in per-mille of the full frame
+    private var stSent = 0
+    private var stIdle = 0           // captures with no visible change (nothing sent)
     private var lastStats = 0L
+    @Volatile private var touchOk = 0
+    @Volatile private var touchFail = 0
 
     // Touch stroke being recorded
     private val stroke = ArrayList<Pair<Float, Float>>()
@@ -268,21 +285,53 @@ class StreamService : Service(), CarServer.Listener {
                     inFlight[seq] = now
                 }
             }
-            val bmp = crop ?: continue
+            val full = crop ?: continue
+            val fw = full.width; val fh = full.height
+            val cur = spare?.takeIf { it.size == fw * fh } ?: IntArray(fw * fh)
+            spare = null
+            full.getPixels(cur, 0, fw, 0, 0, fw, fh)
+
+            // What changed since the picture the car already has?
+            val now = SystemClock.uptimeMillis()
+            val prev = shown
+            val needFull = forceFull || !partialOk || prev == null || shownW != fw || shownH != fh
+            val rect: IntArray? = if (needFull) intArrayOf(0, 0, fw, fh)
+                else FrameDiff.changedRect(cur, prev!!, fw, fh)
+            if (rect == null) {
+                // Nothing visible changed: send nothing, free the slot.
+                synchronized(lock) { inFlight.remove(seq); stIdle++ }
+                spare = cur
+                full.recycle()
+                continue
+            }
+            var (rx, ry, rw, rh) = rect.toList()
+            // Large changes or a stale picture: send the whole frame (cleans JPEG seams too).
+            if (rw * rh > fw * fh * 6 / 10 || now - lastFullAt > 6000) { rx = 0; ry = 0; rw = fw; rh = fh }
+            if (rw == fw && rh == fh) { lastFullAt = now; forceFull = false }
+            spare = shown
+            shown = cur; shownW = fw; shownH = fh
+
+            val part = if (rw == fw && rh == fh) full else Bitmap.createBitmap(full, rx, ry, rw, rh)
             val t0 = SystemClock.uptimeMillis()
             out.reset()
-            bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            part.compress(Bitmap.CompressFormat.JPEG, quality, out)
             val enc = (SystemClock.uptimeMillis() - t0).toInt()
             val jpeg = out.toByteArray()
-            val header = ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
-                .putInt(seq.toInt()).putShort(bmp.width.toShort()).putShort(bmp.height.toShort())
-                .putShort(enc.coerceAtMost(65535).toShort()).putShort(quality.toShort()).array()
-            bmp.recycle()
+            // seq u32 · frame w,h u16 · enc ms u16 · quality u16 · rect x,y,w,h u16  (20 bytes)
+            val header = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
+                .putInt(seq.toInt()).putShort(fw.toShort()).putShort(fh.toShort())
+                .putShort(enc.coerceAtMost(65535).toShort()).putShort(quality.toShort())
+                .putShort(rx.toShort()).putShort(ry.toShort()).putShort(rw.toShort()).putShort(rh.toShort())
+                .array()
+            if (part !== full) part.recycle()
+            full.recycle()
             val ok = conn?.sendBinary(header, jpeg) ?: false
             synchronized(lock) {
-                if (!ok) inFlight.remove(seq) else inFlight[seq] = SystemClock.uptimeMillis()
+                if (!ok) { inFlight.remove(seq); forceFull = true } else inFlight[seq] = SystemClock.uptimeMillis()
                 stBytes += jpeg.size
                 stEnc += enc
+                stSent++
+                stArea += (rw.toLong() * rh * 1000) / (fw.toLong() * fh)
             }
             maybeStats()
         }
@@ -299,13 +348,16 @@ class StreamService : Service(), CarServer.Listener {
             // lat  = phone sent -> car drew (incl. waiting in the car's queue)
             // net  = lat minus the car's own wait/decode/draw time = network + WebSocket delivery
             val lat = stLatency / n; val dec = stDecode / n; val draw = stDraw / n; val wait = stWait / n
+            val sent = stSent.coerceAtLeast(1)
             json = ("{\"fps\":%.1f,\"lat\":%d,\"kb\":%d,\"enc\":%d,\"dec\":%d,\"draw\":%d,\"wait\":%d," +
-                "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b}").format(
-                java.util.Locale.US, stFrames / secs, lat, (stBytes / n / 1024), stEnc / n, dec, draw, wait,
+                "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b," +
+                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d}").format(
+                java.util.Locale.US, stFrames / secs, lat, (stBytes / sent / 1024), stEnc / sent, dec, draw, wait,
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, frameH, quality, window,
-                TouchService.instance != null)
+                TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail)
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
+            stArea = 0; stSent = 0; stIdle = 0
             lastStats = now
         }
         c.sendText("s:$json")
@@ -317,6 +369,7 @@ class StreamService : Service(), CarServer.Listener {
         synchronized(lock) {
             this.conn = conn
             inFlight.clear()
+            forceFull = true
             sentCaptureSeq = 0          // send the current screen right away
             lock.notifyAll()
         }
@@ -347,15 +400,18 @@ class StreamService : Service(), CarServer.Listener {
             "cfg" -> {
                 p.getOrNull(2)?.toIntOrNull()?.let { quality = it.coerceIn(20, 90) }
                 p.getOrNull(3)?.toIntOrNull()?.let { window = it.coerceIn(1, 4) }
+                p.getOrNull(4)?.let { partialOk = it != "0" }
+                forceFull = true
                 p.getOrNull(1)?.toIntOrNull()?.let { if (it != wantWidth) { wantWidth = it; resize(it) } }
                 synchronized(lock) { sentCaptureSeq = 0; lock.notifyAll() }
             }
-            "t" -> touch(p)
+            "full" -> synchronized(lock) { forceFull = true; sentCaptureSeq = 0; lock.notifyAll() }
+            "t" -> touch(conn, p)
             "k" -> TouchService.instance?.key(p.getOrNull(1) ?: "")
         }
     }
 
-    private fun touch(p: List<String>) {
+    private fun touch(conn: CarServer.Conn, p: List<String>) {
         val x = (p.getOrNull(2)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * screenW
         val y = (p.getOrNull(3)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * screenH
         synchronized(stroke) {
@@ -365,7 +421,11 @@ class StreamService : Service(), CarServer.Listener {
                 "u" -> {
                     if (stroke.isEmpty()) return
                     stroke.add(x to y)
-                    TouchService.instance?.stroke(ArrayList(stroke), SystemClock.uptimeMillis() - strokeStart)
+                    val svc = TouchService.instance
+                    val ok = svc?.stroke(ArrayList(stroke), SystemClock.uptimeMillis() - strokeStart) ?: false
+                    if (ok) touchOk++ else touchFail++
+                    // ti:<1 injected | 0 failed | x no touch service>
+                    conn.sendText("ti:" + (if (svc == null) "x" else if (ok) "1" else "0"))
                     stroke.clear()
                 }
             }

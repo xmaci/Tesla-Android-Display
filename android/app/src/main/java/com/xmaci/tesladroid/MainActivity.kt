@@ -34,6 +34,9 @@ class MainActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var diag: TextView
+    private lateinit var helperStatus: TextView
+    @Volatile private var helperMsg = ""
+    @Volatile private var helperLine: String? = null
     @Volatile private var selfTest = ""
     private lateinit var url: TextView
     private lateinit var ipField: EditText
@@ -60,7 +63,7 @@ class MainActivity : Activity() {
             Button(this).apply { text = s; isAllCaps = false; setOnClickListener { onClick() } }
                 .also { col.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
-        text("TeslaDroid · M1 · 0.2.2", 26f, true)
+        text("TeslaDroid · M1 · 0.3.0", 26f, true)
         text("Екран телефона на Tesla · Phone screen on the Tesla", 14f, color = Color.GRAY)
 
         text("1. Дотик з екрана авто · Touch from the car screen", 17f, true)
@@ -95,6 +98,29 @@ class MainActivity : Activity() {
 
         text("Поки що (M1a) телефон має лишатися розблокованим, екран — увімкненим. · For now (M1a) keep the phone unlocked with the screen on.",
             12f, color = Color.GRAY)
+
+        text("4. Помічник (один раз) · Helper (one-time)", 17f, true)
+        text("Потрібен для екрана у формі авто й роботи із заблокованим телефоном. Телефон має бути в Wi‑Fi.\n" +
+            "1) Увімкніть «Параметри розробника» (7× торкніться «Номер збірки»).\n" +
+            "2) «Сполучити» → «Налагодження через Wi‑Fi» → «Сполучити пристрій за кодом».\n" +
+            "3) Опустіть шторку й введіть 6 цифр у сповіщення TeslaDroid.\n" +
+            "Needed for the car-shaped display and a locked phone. Phone must be on Wi‑Fi.\n" +
+            "1) Enable Developer options (tap Build number 7×). 2) Pair → Wireless debugging → Pair device with pairing code. " +
+            "3) Pull down the shade and type the 6 digits into the TeslaDroid notification.", 12f)
+        helperStatus = text("", 14f)
+        button("Сполучити · Pair (Wireless debugging)") {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
+            }
+            PairingService.start(this)
+            try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
+            catch (_: Exception) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
+        }
+        button("Запустити помічника · Start helper") {
+            helperMsg = "…"
+            Thread { helperMsg = Helper.start(this) }.start()
+        }
+        button("Зупинити помічника · Stop helper") { Thread { Helper.stop(this); helperMsg = "stopped" }.start() }
 
         text("Діагностика · Diagnostics", 17f, true)
         button("Самоперевірка · Self-test") { runSelfTest() }
@@ -190,6 +216,10 @@ class MainActivity : Activity() {
         lines += "Дотик · Touch: " + if (TouchService.instance != null) "✅" else "❌ (крок 1 · step 1)"
         lines += "Tesla: " + if (StreamService.carConnected) "✅ ${StreamService.statsLine}" else "очікування · waiting"
         status.text = lines.joinToString("\n")
+        Thread { helperLine = Helper.ping(this) }.start()
+        helperStatus.text = (if (helperLine != null) "✅ $helperLine" else "❌ не запущено · not running") +
+            (if (PairingService.state.isNotEmpty()) "\npairing: ${PairingService.state}" else "") +
+            (if (helperMsg.isNotEmpty()) "\n$helperMsg" else "")
         val srv = StreamService.instanceServer
         diag.text = buildString {
             append("ports: ").append(srv?.ports ?: "-")

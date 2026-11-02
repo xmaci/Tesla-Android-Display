@@ -45,6 +45,16 @@
                 android:value="Local-only address so the car browser can reach this phone over its hotspot" />
         </service>
 
+        <!-- One-time Wireless debugging pairing, code entered from the notification -->
+        <service
+            android:name=".PairingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Pairs with this phone's own Wireless debugging to start the TeslaDroid helper" />
+        </service>
+
         <!-- Injects taps and swipes from the car screen -->
         <service
             android:name=".TouchService"

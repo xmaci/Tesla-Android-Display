@@ -113,6 +113,16 @@ Field report: Auto made it worse — each switch resizes the capture (full frame
 switching back and forth stuttered. MJPEG at small sizes is fast enough without it. Auto now defaults to
 Off; when on, it switches at most once per 5 s and needs 3 s of calm to return to full size.
 
+## 0.4.5 — stuck-picture watchdog
+
+Field report: mjpeg showed 9 fps but the picture stayed the same while the screen moved. In MJPEG views
+`upd` now shows how much of the phone screen really changed (it was always 100 %), and the car samples the
+shown picture (16×16) every 1.3 s: `pic ok` = it changes, `same` = the phone screen is still too,
+`STUCK` = the phone reports changes but the car picture is frozen. After ~4 s STUCK the page reopens the
+stream (`↻N` counts restarts); the new ↻ bar button does the same by hand.
+How to read it: `upd` ≈ 0 % while moving → the phone captures a still screen (phone side);
+`upd` > 0 and `pic STUCK` → the car browser froze the stream (car side).
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

@@ -457,6 +457,7 @@ class StreamService : Service(), CarServer.Listener {
                     } else { checkCalm(SystemClock.uptimeMillis()); lock.wait(40) }
                 }
                 val bmp = copy ?: continue
+                var changed = 1000
                 run {
                     val w = bmp.width; val h = bmp.height
                     val cur = mjSpare?.takeIf { it.size == w * h } ?: IntArray(w * h)
@@ -465,6 +466,7 @@ class StreamService : Service(), CarServer.Listener {
                     val area = if (prev == null || prev.size != cur.size) 1000 else
                         FrameDiff.changedRect(cur, prev, w, h)?.let { r -> (r[2].toLong() * r[3] * 1000 / (w.toLong() * h)).toInt() } ?: 0
                     mjSpare = prev; mjPrev = cur
+                    changed = area
                     noteChange(area, SystemClock.uptimeMillis())
                 }
                 val t0 = SystemClock.uptimeMillis()
@@ -483,7 +485,7 @@ class StreamService : Service(), CarServer.Listener {
                     stBytes += buf.size()
                     stEnc += enc
                     stSent++
-                    stArea += 1000
+                    stArea += changed                             // real change, so "upd" shows if the phone sees motion
                     stLatency += lastWrite - tw                  // time blocked = how far the car lags
                     stDecode += 0
                 }

@@ -47,8 +47,9 @@
   <button id="kRecents">▢</button>
   <button id="kNotif">☰</button>
   <button id="bSet">⚙</button>
+  <button id="bRe">↻</button>
   <div id="stats">…</div>
-  <div id="ver">v0.4.4</div>
+  <div id="ver">v0.4.5</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
@@ -309,7 +310,7 @@
     var fps = isMj() ? (server.fps || 0) : Math.round(localFps * 10) / 10;
     statsEl.innerHTML = fps + ' fps · ' + (isMj() ? 'wait ' : '') + (server.lat || 0) + ' ms · ' +
       (server.kb || 0) + ' KB · upd ' + (server.area || 0) + '% · ' + (server.w || frameW) + '×' + (server.h || frameH) +
-      ' · ' + set.v + (server.motion ? ' ⚡' : '') + '<br>' +
+      ' · ' + set.v + (server.motion ? ' ⚡' : '') + (isMj() ? ' · pic ' + picState + (mjRestarts ? ' ↻' + mjRestarts : '') : '') + '<br>' +
       'enc ' + (server.enc || 0) + ' · net ' + (server.net || 0) + ' · wait ' + (server.wait || 0) +
       ' · dec ' + (server.dec || 0) + ' · draw ' + (server.draw || 0) + ' ms · ' + touch;
   }
@@ -379,6 +380,32 @@
   onTap(document.getElementById('kHome'), key('home'), 600);
   onTap(document.getElementById('kRecents'), key('recents'), 600);
   onTap(document.getElementById('kNotif'), key('notifications'), 600);
+
+  // ---- MJPEG watchdog ----
+  // The phone reports how much of the screen really changed ("upd"). If it says the screen moves but the
+  // picture shown here has not changed for ~4 s, the browser's stream is stuck: reopen it.
+  var probe = document.createElement('canvas'); probe.width = 16; probe.height = 16;
+  var pctx = probe.getContext('2d'), lastSig = '', sameFor = 0, picState = '…', mjRestarts = 0, probeOk = true;
+  function restartMj() { if (isMj()) { mjOn = false; layout(); } }
+  function checkMj() {
+    if (!isMj() || !probeOk || !mj.complete && !mj.naturalWidth) { return; }
+    var sig = '';
+    try {
+      pctx.drawImage(mj, 0, 0, 16, 16);
+      var d = pctx.getImageData(0, 0, 16, 16).data;
+      for (var i = 0; i < d.length; i += 4) { sig += d[i] + ',' + d[i + 1] + ',' + d[i + 2] + ';'; }
+    } catch (e) { probeOk = false; picState = 'n/a'; return; }
+    if (sig === lastSig) {
+      sameFor++;
+      if ((server.area || 0) >= 5 && (server.fps || 0) >= 2) {
+        picState = 'STUCK';
+        if (sameFor >= 3) { sameFor = 0; mjRestarts++; restartMj(); }
+      } else { picState = 'same'; }
+    } else { sameFor = 0; picState = 'ok'; }
+    lastSig = sig;
+  }
+  setInterval(checkMj, 1300);
+  onTap(document.getElementById('bRe'), function () { if (isMj()) { restartMj(); } else { askFull(); } }, 1000);
 
   setInterval(showStats, 1000);
   connect();

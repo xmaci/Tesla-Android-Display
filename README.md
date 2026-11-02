@@ -10,7 +10,7 @@ Targets: Tesla MCU1 (Tegra), MCU2 (Intel), MCU3 (Ryzen) · Android 13+ (tested o
 | Milestone | State |
 | --- | --- |
 | M0 · Browser capability probe | done on MCU1 → [docs/M0-probe.md](docs/M0-probe.md) |
-| M1a · Phone screen on the car, flow-controlled JPEG + touch | ready to test → [docs/M1a.md](docs/M1a.md) |
+| M1a · Phone screen on the car, flow-controlled JPEG + touch | **working on MCU1** (2026-11-02), measuring → [docs/M1a.md](docs/M1a.md) |
 | M1 · Virtual display, locked phone, live touch, partial updates | next |
 | M2 · Automation, UI, audio (MVP) | planned |
 | M3 · Phase 2 (anti-jamming, voice, extras) | planned |

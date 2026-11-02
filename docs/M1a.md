@@ -10,6 +10,9 @@ and see what fps we really get. Phone must stay **unlocked, screen on** — lock
 
 - `CarVpnService` gives the phone the address **7.7.7.8** on a VPN tunnel (only that one address;
   the phone's own internet is untouched). The Tesla browser refuses private IPs but accepts this.
+  **Two tunnels are required** (confirmed on Pixel 7, 2026-11-02): Android drops hotspot packets addressed
+  to the *active* VPN's own address, so a second helper tunnel (192.168.229.230) becomes the active VPN
+  and 7.7.7.8 stays an ordinary local address. One tunnel = the car never connects.
 - The car opens **`http://7.7.7.8.sslip.io:7777/`** (the app shows the exact link).
   Tested on MCU1: a raw IP is refused, and port 80 never reached the phone; a name + port 7777 works.
   sslip.io is a public DNS name that just resolves to 7.7.7.8; the video never leaves the hotspot.

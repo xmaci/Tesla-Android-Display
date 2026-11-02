@@ -15,6 +15,7 @@ Targets: Tesla MCU1 (Tegra), MCU2 (Intel), MCU3 (Ryzen) · Android 13+ (tested o
 | M1a · Phone screen on the car, flow-controlled JPEG + touch | **working on MCU1** (2026-11-02), measuring → [docs/M1a.md](docs/M1a.md) |
 | M1 step 1 · speed tools (frames in flight, scale modes) | done, MCU1 measured → [docs/M1a.md](docs/M1a.md) |
 | M1 step 2a · privileged helper via Wireless debugging | **working on Pixel 7** (2026-11-02): uid 2000, touch enabled via shell → [docs/M1-helper.md](docs/M1-helper.md) |
+| M1 · MJPEG streaming + partial/adaptive updates | **MCU1: ~40 fps at 320px q25, wait 1 ms** (0.4.3) → [docs/M1a.md](docs/M1a.md) |
 | M1 step 2b/2c · car-shaped virtual display 800×480 / 1024×600, apps + touch on it | next |
 | M2 · Automation, UI, audio (MVP) | planned |
 | M3 · Phase 2 (anti-jamming, voice, extras) | planned |

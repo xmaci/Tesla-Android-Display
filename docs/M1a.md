@@ -100,6 +100,13 @@ now groups changed tile rows into bands and sends up to 4 rectangles (closest ba
 full frame if their total exceeds 60 %. Header quality field bit 15 = more rectangles of this update follow
 (the car counts fps per complete update).
 
+## Result: MJPEG wins on MCU1 (2026-11-02, 0.4.3)
+
+**mjpeg view, 320px · q25 · ×2 · Auto ✓ (⚡ motion → 240×532): 39.7 fps, wait 1 ms, 4 KB/frame, touch 9→9.**
+About 10× the best canvas result (4–5 fps stretched). Bypassing MCU1's JavaScript thread was the key;
+the browser's native multipart decoder keeps up. MJPEG is the default view from here on; next: find the
+largest size/quality that stays smooth, then the car-shaped display (step 2b) on top of MJPEG.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

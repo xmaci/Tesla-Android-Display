@@ -64,6 +64,13 @@ on screen ≈ 13 fps, ~850k px ≈ 4 fps. 0.2.2 adds mode `img` (two `<img>` ele
 same ceiling. **Decision for MCU1:** render apps on a car-shaped virtual display and show it 1:1
 (~400k px ≈ 8–10 fps); offer a "large" stretched view (~4–5 fps) as an option.
 
+## Known pitfalls (Pixel 7, 2026-11-02)
+
+- **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the
+  page but the WebSocket stream keeps reconnecting. Wi‑Fi is only needed to (re)start the helper.
+- **Tesla may prefer home Wi‑Fi** over the phone hotspot near home; then nothing reaches the phone.
+- After a network change, tap ■ Stop → ▶ Start so the VPN tunnels are rebuilt.
+
 ## In the car
 
 - Top bar: ◀ Back · ● Home · ▢ Recents · ☰ Notifications · frame width · JPEG quality · live stats.

@@ -107,6 +107,12 @@ About 10× the best canvas result (4–5 fps stretched). Bypassing MCU1's JavaSc
 the browser's native multipart decoder keeps up. MJPEG is the default view from here on; next: find the
 largest size/quality that stays smooth, then the car-shaped display (step 2b) on top of MJPEG.
 
+## 0.4.4 — Auto resolution off by default
+
+Field report: Auto made it worse — each switch resizes the capture (full frame, layout change), and
+switching back and forth stuttered. MJPEG at small sizes is fast enough without it. Auto now defaults to
+Off; when on, it switches at most once per 5 s and needs 3 s of calm to return to full size.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

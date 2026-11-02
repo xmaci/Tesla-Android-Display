@@ -48,7 +48,7 @@
   <button id="kNotif">☰</button>
   <button id="bSet">⚙</button>
   <div id="stats">…</div>
-  <div id="ver">v0.4.3</div>
+  <div id="ver">v0.4.4</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
@@ -99,7 +99,7 @@
     w: param('w') || load('w', '432'),
     q: param('q') || load('q', '35'),
     n: param('n') || load('n', '2'),
-    a: param('auto') || load('a', '1'),
+    a: param('auto') || load('a2', '0'),       // Auto resolution: off by default (resizing caused stutter)
     v: param('mode') || load('v', 'mjpeg')
   };
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -147,7 +147,7 @@
   }
   function choose(key, val) {
     if (set[key] === val) { return; }
-    set[key] = val; store(key, val); markOptions();
+    set[key] = val; store(key === 'a' ? 'a2' : key, val); markOptions();
     if (key === 'v') { layout(); }
     sendCfg();
   }

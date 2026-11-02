@@ -99,7 +99,7 @@ class StreamService : Service(), CarServer.Listener {
     // Adaptive resolution: while most of the screen keeps changing (maps, scrolling), capture at
     // MOTION_SCALE of the chosen width — MCU1 decode cost follows pixel count — and return to full
     // sharpness once the screen calms down.
-    @Volatile private var autoRes = true
+    @Volatile private var autoRes = false
     @Volatile private var motion = false
     private var motionStreak = 0
     private var calmSince = 0L
@@ -400,7 +400,8 @@ class StreamService : Service(), CarServer.Listener {
 
     /** Called with the changed area (per-mille of the frame) of every frame sent. */
     @Synchronized private fun noteChange(areaPermille: Int, now: Long) {
-        if (!autoRes || now - lastResizeAt < 800) return      // the frame after a resize is always full
+        // Each switch resizes the capture (full frame, layout change): never more than once per 5 s.
+        if (!autoRes || now - lastResizeAt < 5000) return
         if (!motion) {
             motionStreak = if (areaPermille > 500) motionStreak + 1 else 0
             if (motionStreak >= 3) setMotion(true, now)
@@ -410,11 +411,12 @@ class StreamService : Service(), CarServer.Listener {
         }
     }
 
-    /** Back to full sharpness after 1.5 s of small or no changes. */
+    /** Back to full sharpness after 3 s of small or no changes (and at least 5 s after the last switch). */
     @Synchronized private fun checkCalm(now: Long) {
         if (!motion) return
-        if (calmSince == 0L) { if (now - lastResizeAt > 1500 && now - lastChangeAt() > 1500) setMotion(false, now); return }
-        if (now - calmSince > 1500) setMotion(false, now)
+        if (now - lastResizeAt < 5000) return
+        if (calmSince == 0L) { if (now - lastChangeAt() > 3000) setMotion(false, now); return }
+        if (now - calmSince > 3000) setMotion(false, now)
     }
 
     private fun lastChangeAt(): Long = lastCaptureAt

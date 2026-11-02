@@ -39,5 +39,7 @@ You can turn Wireless debugging off afterwards; the helper keeps running.
 `appops set … ACCESS_RESTRICTED_SETTINGS allow` and adds its touch service to
 `enabled_accessibility_services`, keeping any services already enabled.
 
+**Confirmed on Pixel 7 (2026-11-02):** paired, helper `TDHELPER v=1 uid=2000`, Accessibility touch service enabled by the helper start.
+
 2a only proves the helper runs as `shell`. 2b: virtual display 800×480 / 1024×600 + capture.
 2c: launching apps on it and touch injection.

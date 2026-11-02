@@ -5,6 +5,8 @@
 
 Targets: Tesla MCU1 (Tegra), MCU2 (Intel), MCU3 (Ryzen) · Android 13+ (tested on Pixel 7).
 
+**How to use it day to day → [docs/USAGE.md](docs/USAGE.md)**
+
 ## Status
 
 | Milestone | State |

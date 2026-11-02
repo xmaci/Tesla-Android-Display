@@ -84,6 +84,14 @@ scaled) and **mj1:1** use `<img src="/mjpeg">` (multipart/x-mixed-replace): the 
 paints natively. The phone paces the stream by TCP backpressure (32 KB send buffer, newest capture only),
 so frames cannot pile up. Touch and stats still use the WebSocket; in these views fps comes from the phone.
 
+## 0.4.2 — adaptive resolution in motion
+
+Field report (0.4.0, 540px gpu): Claude app 15–17 fps, Waze 2–6 fps. Partial updates make static UIs
+cheap; Waze changes nearly the whole screen every frame, so every frame is a full 540×1200 decode.
+Now, when >50 % of the frame changes on 3 frames in a row, the phone captures at 60 % width (≈2.8× fewer
+pixels to decode); after 1.5 s of small or no changes it returns to full width. The car keeps the same
+on-screen size (softer picture while moving), ⚡ in the bar shows motion mode. ⚙ → Auto on/off.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

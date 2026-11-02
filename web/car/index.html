@@ -48,7 +48,7 @@
   <button id="kNotif">☰</button>
   <button id="bSet">⚙</button>
   <div id="stats">…</div>
-  <div id="ver">v0.4.1</div>
+  <div id="ver">v0.4.2</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
@@ -56,6 +56,7 @@
   <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div></div>
   <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
   <div class="row"><div class="lbl">Кадрів у дорозі · Frames in flight</div><div id="optN"></div></div>
+  <div class="row"><div class="lbl">Авто-роздільність у русі · Auto resolution in motion</div><div id="optA"></div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
     <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
   <button id="bClose">✕ Закрити · Close</button>
@@ -91,12 +92,14 @@
     w: ['320', '432', '540', '720'],
     q: ['25', '35', '50', '65'],
     n: ['1', '2', '3'],
+    a: ['1', '0'],
     v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img']
   };
   var set = {
     w: param('w') || load('w', '432'),
     q: param('q') || load('q', '35'),
     n: param('n') || load('n', '2'),
+    a: param('auto') || load('a', '1'),
     v: param('mode') || load('v', 'mjpeg')
   };
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -105,7 +108,7 @@
   var frameW = 0, frameH = 0;
 
   function sendCfg() {
-    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1')); }
+    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + set.a); }
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
@@ -151,6 +154,7 @@
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
   buildOptions('q', 'optQ', function (v) { return 'q' + v; });
   buildOptions('n', 'optN', function (v) { return '×' + v; });
+  buildOptions('a', 'optA', function (v) { return v === '1' ? 'Auto ✓' : 'Off'; });
   buildOptions('v', 'optV', function (v) { return v; });
   markOptions();
   var panelOpen = false;
@@ -304,7 +308,7 @@
     var fps = isMj() ? (server.fps || 0) : Math.round(localFps * 10) / 10;
     statsEl.innerHTML = fps + ' fps · ' + (isMj() ? 'wait ' : '') + (server.lat || 0) + ' ms · ' +
       (server.kb || 0) + ' KB · upd ' + (server.area || 0) + '% · ' + (server.w || frameW) + '×' + (server.h || frameH) +
-      ' · ' + set.v + '<br>' +
+      ' · ' + set.v + (server.motion ? ' ⚡' : '') + '<br>' +
       'enc ' + (server.enc || 0) + ' · net ' + (server.net || 0) + ' · wait ' + (server.wait || 0) +
       ' · dec ' + (server.dec || 0) + ' · draw ' + (server.draw || 0) + ' ms · ' + touch;
   }

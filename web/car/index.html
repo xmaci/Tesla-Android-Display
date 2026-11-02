@@ -82,7 +82,7 @@
   var cycleW = function () { curW = next(WIDTHS, curW); store('td_w', curW); labels(); sendCfg(); };
   var cycleQ = function () { curQ = next(QUALS, curQ); store('td_q', curQ); labels(); sendCfg(); };
   var cycleN = function () { curN = next(WINS, curN); store('td_n', curN); labels(); sendCfg(); };
-  var cycleF = function () { mode = next(MODES, mode); store('td_mode', mode); labels(); fit(); };
+  var cycleF = function () { mode = next(MODES, mode); store('td_mode', mode); labels(); setTimeout(fit, 0); };
   labels();
 
   // ---- layout: fit the frame into the area below the bar, keep aspect ----
@@ -262,15 +262,22 @@
   // ---- bar buttons: one action per tap. MCU1 fires touch + emulated click for one tap,
   // so act on touchend and swallow the click that follows; plain click still works on desktop.
   function onTap(el, fn) {
-    var last = 0;
-    function fire(e) {
-      var n = now();
-      if (e) { e.preventDefault(); }
-      if (n - last < 450) { return; }
-      last = n; fn();
-    }
-    el.addEventListener('touchend', fire, false);
-    el.addEventListener('click', function (e) { if (now() - last < 800) { e.preventDefault(); return; } fire(e); }, false);
+    // pendingTouch: a touch on this button already acted; the emulated click that MCU1 sends
+    // afterwards can arrive much later (e.g. after a heavy re-layout), so swallow the next click
+    // whenever it comes, regardless of timing. Cleared after 3 s in case no click follows.
+    var pendingTouch = false, clearT = null;
+    el.addEventListener('touchend', function (e) {
+      e.preventDefault();
+      pendingTouch = true;
+      if (clearT) { clearTimeout(clearT); }
+      clearT = setTimeout(function () { pendingTouch = false; }, 3000);
+      fn();
+    }, false);
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (pendingTouch) { pendingTouch = false; return; }
+      fn();
+    }, false);
   }
   function key(name) { return function () { if (ws && ws.readyState === 1) { ws.send('k:' + name); } }; }
   onTap(document.getElementById('kBack'), key('back'));

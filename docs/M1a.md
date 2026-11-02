@@ -60,6 +60,10 @@ the canvas has the on-screen size and `drawImage` scales each frame instead of C
 (dec 138, draw 112). **The cost follows the number of pixels shown, not the frame size**: ~230k px
 on screen ≈ 13 fps, ~850k px ≈ 4 fps. 0.2.2 adds mode `img` (two `<img>` elements, no canvas).
 
+0.2.2 `img` mode on MCU1: 432 ×2 → 4.9 fps / 382 ms (load+paint 172 ms). Slightly better than `draw`,
+same ceiling. **Decision for MCU1:** render apps on a car-shaped virtual display and show it 1:1
+(~400k px ≈ 8–10 fps); offer a "large" stretched view (~4–5 fps) as an option.
+
 ## In the car
 
 - Top bar: ◀ Back · ● Home · ▢ Recents · ☰ Notifications · frame width · JPEG quality · live stats.

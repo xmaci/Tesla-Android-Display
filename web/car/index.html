@@ -12,7 +12,7 @@
   html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: Arial, Helvetica, sans-serif; overflow: hidden; }
   #bar { height: 64px; display: flex; align-items: center; background: #161616; border-bottom: 1px solid #2a2a2a; padding: 0 8px; }
   #bar button { font-size: 22px; min-width: 76px; height: 52px; margin-right: 8px; background: #2b2b2b; color: #eee; border: 0; border-radius: 8px; }
-  #bar select { font-size: 18px; height: 44px; margin-right: 8px; background: #2b2b2b; color: #eee; border: 0; border-radius: 6px; }
+  #bar button.opt { min-width: 110px; font-size: 20px; background: #20324f; }
   #stats { flex: 1; text-align: right; font-size: 16px; color: #9a9a9a; white-space: nowrap; overflow: hidden; }
   #wrap { position: absolute; top: 65px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
   #screen { background: #050505; display: block; }
@@ -26,17 +26,8 @@
   <button id="kHome">●</button>
   <button id="kRecents">▢</button>
   <button id="kNotif">☰</button>
-  <select id="selW">
-    <option value="320">320</option>
-    <option value="432">432</option>
-    <option value="540">540</option>
-    <option value="720">720</option>
-  </select>
-  <select id="selQ">
-    <option value="35">q35</option>
-    <option value="50">q50</option>
-    <option value="65">q65</option>
-  </select>
+  <button id="bW" class="opt">432px</button>
+  <button id="bQ" class="opt">q50</button>
   <div id="stats">…</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas></div>
@@ -60,12 +51,22 @@
   function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
   function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
 
-  var selW = document.getElementById('selW'), selQ = document.getElementById('selQ');
-  selW.value = load('td_w', '432');
-  selQ.value = load('td_q', '50');
-  function sendCfg() { if (ws && ws.readyState === 1) { ws.send('cfg:' + selW.value + ':' + selQ.value); } }
-  selW.onchange = function () { store('td_w', selW.value); sendCfg(); };
-  selQ.onchange = function () { store('td_q', selQ.value); sendCfg(); };
+  // Width / quality: tap to cycle (MCU1 cannot open <select> menus).
+  // The URL can also set them: /?w=320&q=35
+  var WIDTHS = ['240', '320', '432', '540', '720'], QUALS = ['25', '35', '50', '65'];
+  function param(name) {
+    var m = new RegExp('[?&]' + name + '=([0-9]+)').exec(location.search);
+    return m ? m[1] : null;
+  }
+  var curW = param('w') || load('td_w', '432');
+  var curQ = param('q') || load('td_q', '50');
+  var bW = document.getElementById('bW'), bQ = document.getElementById('bQ');
+  function labels() { bW.innerHTML = curW + 'px'; bQ.innerHTML = 'q' + curQ; }
+  function next(list, v) { var i = list.indexOf(v); return list[(i + 1) % list.length]; }
+  function sendCfg() { if (ws && ws.readyState === 1) { ws.send('cfg:' + curW + ':' + curQ); } }
+  bW.onclick = function () { curW = next(WIDTHS, curW); store('td_w', curW); labels(); sendCfg(); };
+  bQ.onclick = function () { curQ = next(QUALS, curQ); store('td_q', curQ); labels(); sendCfg(); };
+  labels();
 
   // ---- layout: fit the frame into the area below the bar, keep aspect ----
   function fit() {

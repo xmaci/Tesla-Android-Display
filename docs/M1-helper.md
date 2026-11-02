@@ -34,5 +34,10 @@ You can turn Wireless debugging off afterwards; the helper keeps running.
   random token kept in the app's private files, so other apps cannot use it.
   Log: `/data/local/tmp/tesladroid-helper.log`.
 
+**Touch unlock:** newer Android blocks Accessibility for sideloaded apps and may hide
+"Allow restricted settings". When the helper starts, TeslaDroid also runs (as shell)
+`appops set … ACCESS_RESTRICTED_SETTINGS allow` and adds its touch service to
+`enabled_accessibility_services`, keeping any services already enabled.
+
 2a only proves the helper runs as `shell`. 2b: virtual display 800×480 / 1024×600 + capture.
 2c: launching apps on it and touch injection.

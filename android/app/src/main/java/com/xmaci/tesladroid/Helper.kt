@@ -54,21 +54,20 @@ object Helper {
         } catch (e: Exception) {
             return "adb connect failed: ${e.message}"
         }
+        // Sideloaded apps can't switch on Accessibility on newer Android ("restricted setting",
+        // and the "Allow restricted settings" menu may be hidden). With shell rights we can:
+        // allow it and turn on TeslaDroid's touch service directly.
+        val pkg = ctx.packageName
+        val svc = "$pkg/${TouchService::class.java.name}"
+        runShell(adb, "appops set $pkg ACCESS_RESTRICTED_SETTINGS allow; " +
+            "S=\$(settings get secure enabled_accessibility_services); " +
+            "case \"\$S\" in *$svc*) ;; null|\"\") settings put secure enabled_accessibility_services $svc ;; " +
+            "*) settings put secure enabled_accessibility_services \"\$S:$svc\" ;; esac; " +
+            "settings put secure accessibility_enabled 1", 1500)
+
         val apk = ctx.applicationInfo.sourceDir
-        val cmd = "shell:CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
-            " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null &"
-        try {
-            adb.openStream(cmd).use { stream ->
-                val input = stream.openInputStream()
-                val buf = ByteArray(1024)
-                val until = System.currentTimeMillis() + 1500
-                while (System.currentTimeMillis() < until && !stream.isClosed) {
-                    if (input.available() > 0) input.read(buf) else Thread.sleep(50)
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "helper launch stream", e)
-        }
+        runShell(adb, "CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
+            " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null &", 1500)
         repeat(20) {
             ping(ctx)?.let { return "running: $it" }
             Thread.sleep(250)
@@ -77,4 +76,25 @@ object Helper {
     }
 
     fun stop(ctx: Context) { request(ctx, "quit"); info = null }
+
+    /** Runs a shell command over ADB and drains its output for up to [waitMs]. */
+    private fun runShell(adb: AdbManager, command: String, waitMs: Long): String {
+        val out = StringBuilder()
+        try {
+            adb.openStream("shell:$command").use { stream ->
+                val input = stream.openInputStream()
+                val buf = ByteArray(1024)
+                val until = System.currentTimeMillis() + waitMs
+                while (System.currentTimeMillis() < until && !stream.isClosed) {
+                    if (input.available() > 0) {
+                        val n = input.read(buf)
+                        if (n > 0) out.append(String(buf, 0, n))
+                    } else Thread.sleep(50)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "shell: $command", e)
+        }
+        return out.toString()
+    }
 }

@@ -56,6 +56,10 @@ MCU1 measured with 0.2.0 (2026-11-02):
 **CSS scaling of the canvas is the MCU1 bottleneck** (~3× slower). 0.2.1 adds mode `draw`:
 the canvas has the on-screen size and `drawImage` scales each frame instead of CSS.
 
+0.2.1 `draw` mode on MCU1: 320 ×2 → 4.0 fps / 421 ms (dec 92, draw 114); 432 ×2 → 4.4 fps / 475 ms
+(dec 138, draw 112). **The cost follows the number of pixels shown, not the frame size**: ~230k px
+on screen ≈ 13 fps, ~850k px ≈ 4 fps. 0.2.2 adds mode `img` (two `<img>` elements, no canvas).
+
 ## In the car
 
 - Top bar: ◀ Back · ● Home · ▢ Recents · ☰ Notifications · frame width · JPEG quality · live stats.

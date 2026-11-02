@@ -15,8 +15,9 @@
   #bar button { font-size: 22px; min-width: 64px; height: 52px; margin-right: 8px; background: #2b2b2b; color: #eee; border: 0; border-radius: 8px; }
   #bar button.opt { min-width: 86px; font-size: 20px; background: #20324f; }
   #stats { flex: 1; text-align: right; font-size: 15px; line-height: 19px; color: #9a9a9a; white-space: nowrap; overflow: hidden; }
-  #wrap { position: absolute; top: 65px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
+  #wrap { position: absolute; top: 65px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
   #screen { background: #050505; display: block; }
+  .shot { position: absolute; display: none; }
   #msg { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 26px; color: #888; }
   .dot { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 18px; background: rgba(42,111,219,0.6); pointer-events: none; }
 </style>
@@ -33,7 +34,7 @@
   <button id="bF" class="opt">fit</button>
   <div id="stats">…</div>
 </div>
-<div id="wrap"><canvas id="screen" width="432" height="960"></canvas></div>
+<div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
 
 <script>
@@ -58,7 +59,7 @@
   // The URL can also set them: /?w=320&q=35
   var WIDTHS = ['240', '320', '432', '540', '720'], QUALS = ['25', '35', '50', '65'], WINS = ['1', '2', '3'];
   function param(name) {
-    var m = new RegExp('[?&]' + name + '=([0-9]+)').exec(location.search);
+    var m = new RegExp('[?&]' + name + '=([a-z0-9:]+)').exec(location.search);
     return m ? m[1] : null;
   }
   var curW = param('w') || load('td_w', '432');
@@ -66,7 +67,10 @@
   var curN = param('n') || load('td_n', '2');
   // Scale mode: 'draw' = canvas has the on-screen size and drawImage scales (no CSS stretch),
   // 'fit' = CSS stretches a frame-sized canvas (slow on MCU1), '1:1' = no scaling at all.
-  var MODES = ['draw', 'fit', '1:1'];
+  // 'img' = no canvas: two <img> elements, browser decodes and scales natively.
+  var MODES = ['draw', 'fit', '1:1', 'img'];
+  var shots = [document.getElementById('shotA'), document.getElementById('shotB')], front = 0;
+  var shotUrls = [null, null];
   var mode = param('mode') || load('td_mode', 'draw');
   if (MODES.indexOf(mode) < 0) { mode = 'draw'; }
   var frameW = 0, frameH = 0;
@@ -94,6 +98,16 @@
     } else if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
     canvas.style.width = cw + 'px';
     canvas.style.height = ch + 'px';
+    var useImg = mode === 'img';
+    canvas.style.display = useImg ? 'none' : 'block';
+    for (var i = 0; i < 2; i++) {
+      var sh = shots[i];
+      sh.style.width = Math.floor(fw * sc) + 'px';
+      sh.style.height = Math.floor(fh * sc) + 'px';
+      sh.style.left = Math.floor((aw - fw * sc) / 2) + 'px';
+      sh.style.top = Math.floor((ah - fh * sc) / 2) + 'px';
+      if (!useImg) { sh.style.display = 'none'; }
+    }
   }
   window.onresize = fit;
   fit();
@@ -130,6 +144,7 @@
     var seq = dv.getUint32(0), w = dv.getUint16(4), h = dv.getUint16(6);
     var t0 = now(), wait = Math.round(t0 - f.t);
     var url = URLx.createObjectURL(new Blob([buf.slice(12)], { type: 'image/jpeg' }));
+    if (mode === 'img') { showImg(seq, w, h, url, t0, wait); return; }
     var img = new Image();
     img.onload = function () {
       var t1 = now();
@@ -146,6 +161,27 @@
     img.onerror = function () { URLx.revokeObjectURL(url); ack(seq, 0, 0, 0, 0); busy = false; pump(); };
     img.src = url;
   }
+  // <img> path: load into the hidden element, then swap. "dec" = load time, "draw" = swap time.
+  function showImg(seq, w, h, url, t0, wait) {
+    var back = 1 - front, el = shots[back];
+    el.onload = function () {
+      var t1 = now();
+      if (frameW !== w || frameH !== h) { frameW = w; frameH = h; fit(); }
+      el.style.display = 'block';
+      shots[front].style.display = 'none';
+      if (shotUrls[front]) { URLx.revokeObjectURL(shotUrls[front]); }
+      shotUrls[back] = url;
+      front = back;
+      var t2 = now();
+      lastDecode = Math.round(t1 - t0); lastDraw = Math.round(t2 - t1); lastWait = wait;
+      ack(seq, lastDecode, lastDraw, wait, 1);
+      frames++;
+      busy = false; pump();
+    };
+    el.onerror = function () { URLx.revokeObjectURL(url); ack(seq, 0, 0, 0, 0); busy = false; pump(); };
+    el.src = url;
+  }
+
   function ack(seq, dec, draw, wait, shown) {
     if (ws && ws.readyState === 1) { ws.send('ack:' + seq + ':' + dec + ':' + draw + ':' + wait + ':' + shown); }
   }

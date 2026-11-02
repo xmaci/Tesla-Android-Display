@@ -79,10 +79,10 @@
   function labels() { bW.innerHTML = curW + 'px'; bQ.innerHTML = 'q' + curQ; bN.innerHTML = '×' + curN; bF.innerHTML = mode; }
   function next(list, v) { var i = list.indexOf(v); return list[(i + 1) % list.length]; }
   function sendCfg() { if (ws && ws.readyState === 1) { ws.send('cfg:' + curW + ':' + curQ + ':' + curN); } }
-  bW.onclick = function () { curW = next(WIDTHS, curW); store('td_w', curW); labels(); sendCfg(); };
-  bQ.onclick = function () { curQ = next(QUALS, curQ); store('td_q', curQ); labels(); sendCfg(); };
-  bN.onclick = function () { curN = next(WINS, curN); store('td_n', curN); labels(); sendCfg(); };
-  bF.onclick = function () { mode = next(MODES, mode); store('td_mode', mode); labels(); fit(); };
+  var cycleW = function () { curW = next(WIDTHS, curW); store('td_w', curW); labels(); sendCfg(); };
+  var cycleQ = function () { curQ = next(QUALS, curQ); store('td_q', curQ); labels(); sendCfg(); };
+  var cycleN = function () { curN = next(WINS, curN); store('td_n', curN); labels(); sendCfg(); };
+  var cycleF = function () { mode = next(MODES, mode); store('td_mode', mode); labels(); fit(); };
   labels();
 
   // ---- layout: fit the frame into the area below the bar, keep aspect ----
@@ -197,14 +197,19 @@
   }
 
   // ---- touch: normalised 0..1 coordinates, moves throttled to ~20/s ----
-  var lastMove = 0;
+  // Listen on the whole picture area (#wrap) and map to whichever element shows the frame
+  // (canvas, or the front <img> in 'img' mode — the canvas is hidden there).
+  var lastMove = 0, lastTouchT = 0, touching = false;
+  function picture() { return mode === 'img' ? shots[front] : canvas; }
   function pos(clientX, clientY) {
-    var r = canvas.getBoundingClientRect();
+    var r = picture().getBoundingClientRect();
+    if (!r.width || !r.height) { return null; }
     var x = (clientX - r.left) / r.width, y = (clientY - r.top) / r.height;
-    return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)), cx: clientX, cy: clientY };
+    return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)), cx: clientX, cy: clientY,
+      inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
   }
   function sendTouch(kind, p) {
-    if (ws && ws.readyState === 1) { ws.send('t:' + kind + ':' + p.x.toFixed(4) + ':' + p.y.toFixed(4)); }
+    if (p && ws && ws.readyState === 1) { ws.send('t:' + kind + ':' + p.x.toFixed(4) + ':' + p.y.toFixed(4)); }
   }
   function dot(p) {
     var d = document.createElement('div'); d.className = 'dot';
@@ -212,29 +217,68 @@
     document.body.appendChild(d);
     setTimeout(function () { if (d.parentNode) { d.parentNode.removeChild(d); } }, 350);
   }
-  var lastP = null;
-  canvas.addEventListener('touchstart', function (e) {
-    var t = e.changedTouches[0]; lastP = pos(t.clientX, t.clientY); sendTouch('d', lastP); dot(lastP); e.preventDefault();
-  }, false);
-  canvas.addEventListener('touchmove', function (e) {
-    var t = e.changedTouches[0]; lastP = pos(t.clientX, t.clientY);
-    var n = now(); if (n - lastMove > 50) { lastMove = n; sendTouch('m', lastP); }
+  wrap.addEventListener('touchstart', function (e) {
+    lastTouchT = now();
+    var t = e.changedTouches[0], p = pos(t.clientX, t.clientY);
     e.preventDefault();
+    if (!p || !p.inside) { return; }          // tap on the black border: ignore
+    touching = true; sendTouch('d', p); dot(p);
   }, false);
-  canvas.addEventListener('touchend', function (e) {
-    var t = e.changedTouches[0]; lastP = pos(t.clientX, t.clientY); sendTouch('u', lastP); e.preventDefault();
+  wrap.addEventListener('touchmove', function (e) {
+    lastTouchT = now();
+    e.preventDefault();
+    if (!touching) { return; }
+    var t = e.changedTouches[0], n = now();
+    if (n - lastMove > 50) { lastMove = n; sendTouch('m', pos(t.clientX, t.clientY)); }
   }, false);
-  // Mouse fallback (desktop testing)
+  function touchEnd(e) {
+    lastTouchT = now();
+    e.preventDefault();
+    if (!touching) { return; }
+    touching = false;
+    var t = e.changedTouches[0];
+    sendTouch('u', pos(t.clientX, t.clientY));
+  }
+  wrap.addEventListener('touchend', touchEnd, false);
+  wrap.addEventListener('touchcancel', touchEnd, false);
+  // Mouse fallback (desktop testing). Ignored right after a touch: old WebKit also
+  // fires emulated mouse events for every tap.
   var mouseDown = false;
-  canvas.addEventListener('mousedown', function (e) { mouseDown = true; var p = pos(e.clientX, e.clientY); sendTouch('d', p); dot(p); }, false);
-  canvas.addEventListener('mousemove', function (e) { if (!mouseDown) { return; } var n = now(); if (n - lastMove > 50) { lastMove = n; sendTouch('m', pos(e.clientX, e.clientY)); } }, false);
-  window.addEventListener('mouseup', function (e) { if (!mouseDown) { return; } mouseDown = false; sendTouch('u', pos(e.clientX, e.clientY)); }, false);
+  function fromTouch() { return now() - lastTouchT < 800; }
+  wrap.addEventListener('mousedown', function (e) {
+    if (fromTouch()) { return; }
+    var p = pos(e.clientX, e.clientY);
+    if (!p || !p.inside) { return; }
+    mouseDown = true; sendTouch('d', p); dot(p);
+  }, false);
+  wrap.addEventListener('mousemove', function (e) {
+    if (!mouseDown || fromTouch()) { return; }
+    var n = now(); if (n - lastMove > 50) { lastMove = n; sendTouch('m', pos(e.clientX, e.clientY)); }
+  }, false);
+  window.addEventListener('mouseup', function (e) {
+    if (!mouseDown) { return; } mouseDown = false; sendTouch('u', pos(e.clientX, e.clientY));
+  }, false);
 
+  // ---- bar buttons: one action per tap. MCU1 fires touch + emulated click for one tap,
+  // so act on touchend and swallow the click that follows; plain click still works on desktop.
+  function onTap(el, fn) {
+    var last = 0;
+    function fire(e) {
+      var n = now();
+      if (e) { e.preventDefault(); }
+      if (n - last < 450) { return; }
+      last = n; fn();
+    }
+    el.addEventListener('touchend', fire, false);
+    el.addEventListener('click', function (e) { if (now() - last < 800) { e.preventDefault(); return; } fire(e); }, false);
+  }
   function key(name) { return function () { if (ws && ws.readyState === 1) { ws.send('k:' + name); } }; }
-  document.getElementById('kBack').onclick = key('back');
-  document.getElementById('kHome').onclick = key('home');
-  document.getElementById('kRecents').onclick = key('recents');
-  document.getElementById('kNotif').onclick = key('notifications');
+  onTap(document.getElementById('kBack'), key('back'));
+  onTap(document.getElementById('kHome'), key('home'));
+  onTap(document.getElementById('kRecents'), key('recents'));
+  onTap(document.getElementById('kNotif'), key('notifications'));
+
+  onTap(bW, cycleW); onTap(bQ, cycleQ); onTap(bN, cycleN); onTap(bF, cycleF);
 
   setInterval(showStats, 1000);
   connect();

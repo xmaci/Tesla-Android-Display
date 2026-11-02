@@ -11,8 +11,8 @@ android {
         applicationId = "com.xmaci.tesladroid"
         minSdk = 33
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.2.0-m1"
+        versionCode = 7
+        versionName = "0.2.1-m1"
     }
 
     // Shared personal dev key (in repo) so every build can update the installed app in place.

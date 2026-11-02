@@ -64,25 +64,36 @@
   var curW = param('w') || load('td_w', '432');
   var curQ = param('q') || load('td_q', '50');
   var curN = param('n') || load('td_n', '2');
-  var native = (param('fit') === '0') || load('td_fit', '1') === '0';
+  // Scale mode: 'draw' = canvas has the on-screen size and drawImage scales (no CSS stretch),
+  // 'fit' = CSS stretches a frame-sized canvas (slow on MCU1), '1:1' = no scaling at all.
+  var MODES = ['draw', 'fit', '1:1'];
+  var mode = param('mode') || load('td_mode', 'draw');
+  if (MODES.indexOf(mode) < 0) { mode = 'draw'; }
+  var frameW = 0, frameH = 0;
   var bW = document.getElementById('bW'), bQ = document.getElementById('bQ');
   var bN = document.getElementById('bN'), bF = document.getElementById('bF');
-  function labels() { bW.innerHTML = curW + 'px'; bQ.innerHTML = 'q' + curQ; bN.innerHTML = '×' + curN; bF.innerHTML = native ? '1:1' : 'fit'; }
+  function labels() { bW.innerHTML = curW + 'px'; bQ.innerHTML = 'q' + curQ; bN.innerHTML = '×' + curN; bF.innerHTML = mode; }
   function next(list, v) { var i = list.indexOf(v); return list[(i + 1) % list.length]; }
   function sendCfg() { if (ws && ws.readyState === 1) { ws.send('cfg:' + curW + ':' + curQ + ':' + curN); } }
   bW.onclick = function () { curW = next(WIDTHS, curW); store('td_w', curW); labels(); sendCfg(); };
   bQ.onclick = function () { curQ = next(QUALS, curQ); store('td_q', curQ); labels(); sendCfg(); };
   bN.onclick = function () { curN = next(WINS, curN); store('td_n', curN); labels(); sendCfg(); };
-  bF.onclick = function () { native = !native; store('td_fit', native ? '0' : '1'); labels(); fit(); };
+  bF.onclick = function () { mode = next(MODES, mode); store('td_mode', mode); labels(); fit(); };
   labels();
 
   // ---- layout: fit the frame into the area below the bar, keep aspect ----
   function fit() {
     var aw = wrap.clientWidth, ah = wrap.clientHeight;
-    var fw = canvas.width, fh = canvas.height;
-    var s = native ? 1 : Math.min(aw / fw, ah / fh);   // 1:1 = no scaling work for the browser
-    canvas.style.width = Math.floor(fw * s) + 'px';
-    canvas.style.height = Math.floor(fh * s) + 'px';
+    var fw = frameW || canvas.width, fh = frameH || canvas.height;
+    var sc = Math.min(aw / fw, ah / fh);
+    var cw, ch;
+    if (mode === '1:1') { cw = fw; ch = fh; }
+    else { cw = Math.floor(fw * sc); ch = Math.floor(fh * sc); }
+    if (mode === 'fit') {
+      if (canvas.width !== fw || canvas.height !== fh) { canvas.width = fw; canvas.height = fh; }
+    } else if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    canvas.style.width = cw + 'px';
+    canvas.style.height = ch + 'px';
   }
   window.onresize = fit;
   fit();
@@ -122,8 +133,9 @@
     var img = new Image();
     img.onload = function () {
       var t1 = now();
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; fit(); }
-      ctx.drawImage(img, 0, 0);
+      if (frameW !== w || frameH !== h) { frameW = w; frameH = h; fit(); }
+      if (mode === 'draw') { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); }
+      else { ctx.drawImage(img, 0, 0); }
       var t2 = now();
       URLx.revokeObjectURL(url);
       lastDecode = Math.round(t1 - t0); lastDraw = Math.round(t2 - t1); lastWait = wait;

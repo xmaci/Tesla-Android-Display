@@ -36,12 +36,25 @@ and see what fps we really get. Phone must stay **unlocked, screen on** — lock
 
 ## M1 step 1 (build 0.2.0): speed tools
 
-Bar buttons: **width** · **quality** · **×N frames in flight** (1–3) · **fit / 1:1** (1:1 = no browser scaling).
+Bar buttons: **width** · **quality** · **×N frames in flight** (1–3) · **draw / fit / 1:1** scale mode.
 Second stats line: `enc` (phone JPEG) · `net` (network + WebSocket delivery) · `wait` (queued in car) ·
-`dec` (car JPEG decode) · `draw` (canvas draw), all in ms. URL shortcut: `/?w=320&q=35&n=2&fit=0`.
+`dec` (car JPEG decode) · `draw` (canvas draw), all in ms. URL shortcut: `/?w=320&q=35&n=2&mode=draw`.
 
 MCU1 measured with one frame in flight (M1a.4): 432×960 q50 → 4.1 fps, 239 ms, decode 85 ms;
 320×710 q35 → 4.4 fps, 230 ms, decode 45 ms. Decode is not the bottleneck; ~185 ms is elsewhere.
+
+MCU1 measured with 0.2.0 (2026-11-02):
+
+| Settings | fps | delay ms | net | dec | draw |
+| --- | --- | --- | --- | --- | --- |
+| 320 q35 ×1 fit | 4.9 | 187 | 129 | 47 | 11 |
+| 320 q35 ×2 fit | 4.7 | 413 | 185 | 197 | 11 |
+| **320 q35 ×2 1:1** | **13.5** | **155** | 72 | 56 | 14 |
+| 432 q35 ×2 1:1 | 7.9 | 255 | 121 | 93 | 16 |
+| 540 q35 ×2 fit | 3.4 | 502 | 215 | 234 | 23 |
+
+**CSS scaling of the canvas is the MCU1 bottleneck** (~3× slower). 0.2.1 adds mode `draw`:
+the canvas has the on-screen size and `drawImage` scales each frame instead of CSS.
 
 ## In the car
 

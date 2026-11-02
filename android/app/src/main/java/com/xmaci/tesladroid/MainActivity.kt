@@ -33,6 +33,8 @@ class MainActivity : Activity() {
     }
 
     private lateinit var status: TextView
+    private lateinit var diag: TextView
+    @Volatile private var selfTest = ""
     private lateinit var url: TextView
     private lateinit var ipField: EditText
     private val ui = Handler(Looper.getMainLooper())
@@ -58,7 +60,7 @@ class MainActivity : Activity() {
             Button(this).apply { text = s; isAllCaps = false; setOnClickListener { onClick() } }
                 .also { col.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
-        text("TeslaDroid · M1a", 26f, true)
+        text("TeslaDroid · M1a.1", 26f, true)
         text("Екран телефона на Tesla · Phone screen on the Tesla", 14f, color = Color.GRAY)
 
         text("1. Дотик з екрана авто · Touch from the car screen", 17f, true)
@@ -93,6 +95,10 @@ class MainActivity : Activity() {
 
         text("Поки що (M1a) телефон має лишатися розблокованим, екран — увімкненим. · For now (M1a) keep the phone unlocked with the screen on.",
             12f, color = Color.GRAY)
+
+        text("Діагностика · Diagnostics", 17f, true)
+        button("Самоперевірка · Self-test") { runSelfTest() }
+        diag = text("", 12f, color = Color.rgb(170, 200, 255)).apply { typeface = Typeface.MONOSPACE }
 
         setContentView(ScrollView(this).apply { addView(col) })
     }
@@ -140,6 +146,36 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Connects from the phone itself to every listening port on 127.0.0.1 and on the car address. */
+    private fun runSelfTest() {
+        selfTest = "…"
+        Thread {
+            val ports = StreamService.instanceServer?.ports ?: emptyList()
+            val ip = Config.ip(this)
+            val out = ArrayList<String>()
+            if (ports.isEmpty()) out += "server not running (tap Start)"
+            for (host in listOf("127.0.0.1", ip)) for (p in ports) {
+                out += "$host:$p → " + try {
+                    java.net.Socket().use { s ->
+                        s.connect(java.net.InetSocketAddress(host, p), 2000)
+                        s.soTimeout = 2000
+                        s.getOutputStream().write("GET /ping HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())
+                        val r = s.getInputStream().bufferedReader().readText()
+                        if (r.contains("TeslaDroid OK")) "OK" else "answer: ${r.take(40)}"
+                    }
+                } catch (e: Exception) { "FAIL ${e.javaClass.simpleName}: ${e.message}" }
+            }
+            selfTest = out.joinToString("\n")
+        }.start()
+    }
+
+    private fun interfaces(): String = try {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp }
+            .flatMap { ni -> ni.inetAddresses.toList().filterIsInstance<java.net.Inet4Address>().map { "${ni.name}=${it.hostAddress}" } }
+            .joinToString("  ")
+    } catch (e: Exception) { "n/a" }
+
     private fun stopAll() {
         StreamService.stop(this)
         CarVpnService.stop(this)
@@ -154,5 +190,14 @@ class MainActivity : Activity() {
         lines += "Дотик · Touch: " + if (TouchService.instance != null) "✅" else "❌ (крок 1 · step 1)"
         lines += "Tesla: " + if (StreamService.carConnected) "✅ ${StreamService.statsLine}" else "очікування · waiting"
         status.text = lines.joinToString("\n")
+        val srv = StreamService.instanceServer
+        diag.text = buildString {
+            append("ports: ").append(srv?.ports ?: "-")
+            if (!srv?.lastError.isNullOrEmpty()) append("  (").append(srv?.lastError).append(")")
+            append("\nif: ").append(interfaces())
+            if (selfTest.isNotEmpty()) append("\nself-test:\n").append(selfTest)
+            append("\nconnections (newest first):\n")
+            append(srv?.connLog?.joinToString("\n")?.ifEmpty { "none yet" } ?: "none yet")
+        }
     }
 }

@@ -65,6 +65,9 @@ class CarVpnService : VpnService() {
                 .setMtu(1500)
                 .allowBypass()
                 .setBlocking(true)
+                // Our own sockets (the server's replies to the car) must not be routed into
+                // this tunnel, where they would be read and dropped.
+                .addDisallowedApplication(packageName)
                 .establish()
             if (tun == null) {
                 lastError = "VPN permission not granted"

@@ -11,8 +11,8 @@ android {
         applicationId = "com.xmaci.tesladroid"
         minSdk = 33
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-m1a"
+        versionCode = 2
+        versionName = "0.1.1-m1a"
     }
 
     // Shared personal dev key (in repo) so every build can update the installed app in place.
@@ -36,5 +36,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    testOptions { unitTests.isReturnDefaultValues = true }
     sourceSets["main"].assets.srcDirs("src/main/assets", "../../web/car")
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }

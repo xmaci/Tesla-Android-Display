@@ -64,6 +64,8 @@ class StreamService : Service(), CarServer.Listener {
             private set
         @Volatile var statsLine = ""
             private set
+        @Volatile var instanceServer: CarServer? = null
+            private set
 
         fun start(ctx: Context, code: Int, data: Intent) {
             ctx.startForegroundService(Intent(ctx, StreamService::class.java)
@@ -165,7 +167,9 @@ class StreamService : Service(), CarServer.Listener {
         display = mp.createVirtualDisplay("TeslaDroid", w, h, dpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, r.surface, null, captureHandler)
 
-        server = CarServer(assets, this).also {
+        server = CarServer({ name -> try { assets.open(name).use { it.readBytes() } } catch (_: java.io.IOException) { null } },
+            this, { Log.i(TAG, it) }).also {
+            instanceServer = it
             if (!it.start()) throw IllegalStateException("server: ${it.lastError}")
             serverPort = it.port
         }
@@ -363,7 +367,7 @@ class StreamService : Service(), CarServer.Listener {
         running = false
         status = if (status == "streaming") "stopped" else status
         sender?.interrupt(); sender = null
-        server?.stop(); server = null
+        server?.stop(); server = null; instanceServer = null
         carConnected = false
         try { display?.release() } catch (_: Throwable) {}
         display = null

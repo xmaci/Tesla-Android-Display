@@ -1,7 +1,5 @@
 package com.xmaci.tesladroid
 
-import android.content.res.AssetManager
-import android.util.Log
 import java.io.BufferedInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -20,8 +18,9 @@ import java.util.Base64
  * GET /ws          -> WebSocket; only the newest connection is kept (one car at a time)
  */
 class CarServer(
-    private val assets: AssetManager,
+    private val openAsset: (String) -> ByteArray?,
     private val listener: Listener,
+    private val log: (String) -> Unit = {},
 ) {
     interface Listener {
         fun onOpen(conn: Conn)
@@ -30,43 +29,61 @@ class CarServer(
     }
 
     companion object {
-        private const val TAG = "TeslaDroid"
         private const val GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         private const val MAX_FRAME = 64 * 1024
     }
 
+    /** First port that bound (used for the car link); all bound ports listen. */
     @Volatile var port = 0
+        private set
+    @Volatile var ports: List<Int> = emptyList()
         private set
     @Volatile var lastError = ""
         private set
-    @Volatile private var server: ServerSocket? = null
+    private val servers = ArrayList<ServerSocket>()
     @Volatile var current: Conn? = null
         private set
 
-    /** Tries port 80 first (cleanest URL in the car), then 8080. */
-    fun start(): Boolean {
-        for (p in intArrayOf(80, Config.DEFAULT_PORT)) {
+    /** Every incoming connection, newest first (diagnostics shown in the app). */
+    val connLog = java.util.concurrent.ConcurrentLinkedDeque<String>()
+
+    /** Listens on every port in [want] that can be bound (80 = cleanest URL, 7777 as Tesla Display uses). */
+    fun start(want: IntArray = intArrayOf(80, 7777, 8080)): Boolean {
+        val ok = ArrayList<Int>()
+        val errs = ArrayList<String>()
+        for (p in want) {
             try {
                 val s = ServerSocket()
                 s.reuseAddress = true
                 s.bind(InetSocketAddress("0.0.0.0", p), 16)
-                server = s
-                port = p
-                Thread({ acceptLoop(s) }, "car-accept").apply { isDaemon = true; start() }
-                Log.i(TAG, "server on :$p")
-                return true
+                synchronized(servers) { servers.add(s) }
+                ok.add(p)
+                Thread({ acceptLoop(s) }, "car-accept-$p").apply { isDaemon = true; start() }
             } catch (e: IOException) {
-                lastError = "port $p: ${e.message}"
+                errs.add("port $p: ${e.message}")
             }
         }
-        return false
+        ports = ok
+        port = ok.firstOrNull() ?: 0
+        lastError = errs.joinToString("; ")
+        log("listening on $ok ${if (errs.isEmpty()) "" else errs}")
+        return ok.isNotEmpty()
     }
 
     fun stop() {
-        try { server?.close() } catch (_: IOException) {}
-        server = null
+        synchronized(servers) {
+            for (s in servers) try { s.close() } catch (_: IOException) {}
+            servers.clear()
+        }
         current?.close()
         current = null
+    }
+
+    private fun note(s: String) {
+        val t = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        connLog.addFirst("$t $s")
+        while (connLog.size > 12) connLog.pollLast()
+        log(s)
     }
 
     private fun acceptLoop(s: ServerSocket) {
@@ -77,6 +94,8 @@ class CarServer(
     }
 
     private fun handle(sock: Socket) {
+        val who = "${sock.inetAddress?.hostAddress} → ${sock.localAddress?.hostAddress}:${sock.localPort}"
+        note("connect $who")
         try {
             sock.tcpNoDelay = true
             sock.soTimeout = 15000
@@ -93,6 +112,7 @@ class CarServer(
             val parts = requestLine.split(" ")
             if (parts.size < 2 || parts[0] != "GET") return reply(sock, out, 405, "text/plain", "method".toByteArray())
             val path = parts[1].substringBefore('?')
+            note("GET $path from ${sock.inetAddress?.hostAddress}")
             if (path == "/ws" && headers["upgrade"]?.lowercase() == "websocket") {
                 upgrade(sock, input, out, headers["sec-websocket-key"] ?: return sock.close())
                 return
@@ -105,8 +125,8 @@ class CarServer(
 
     private fun serveAsset(sock: Socket, out: OutputStream, name: String) {
         if (name.contains("..") || name.isEmpty()) return reply(sock, out, 404, "text/plain", "not found".toByteArray())
-        val bytes = try { assets.open(name).use { it.readBytes() } } catch (_: IOException) { null }
-            ?: return reply(sock, out, 404, "text/plain", "not found".toByteArray())
+        if (name == "ping") return reply(sock, out, 200, "text/plain", "TeslaDroid OK".toByteArray())
+        val bytes = openAsset(name) ?: return reply(sock, out, 404, "text/plain", "not found".toByteArray())
         val type = when (name.substringAfterLast('.')) {
             "html" -> "text/html; charset=utf-8"
             "js" -> "application/javascript; charset=utf-8"

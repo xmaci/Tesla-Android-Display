@@ -13,6 +13,7 @@ import java.util.Base64
 /**
  * Minimal HTTP + WebSocket server for the car browser. No external libraries.
  *
+ * Listens on 7777 (car link), plus 7778/8080 as spares.
  * GET /            -> assets/index.html (the car client)
  * GET /<file>      -> other files from assets
  * GET /ws          -> WebSocket; only the newest connection is kept (one car at a time)
@@ -47,8 +48,8 @@ class CarServer(
     /** Every incoming connection, newest first (diagnostics shown in the app). */
     val connLog = java.util.concurrent.ConcurrentLinkedDeque<String>()
 
-    /** Listens on every port in [want] that can be bound (80 = cleanest URL, 7777 as Tesla Display uses). */
-    fun start(want: IntArray = intArrayOf(80, 7777, 8080)): Boolean {
+    /** Listens on every port in [want] that can be bound; the first one is the car link (7777). */
+    fun start(want: IntArray = intArrayOf(Config.DEFAULT_PORT, 7778, 8080)): Boolean {
         val ok = ArrayList<Int>()
         val errs = ArrayList<String>()
         for (p in want) {

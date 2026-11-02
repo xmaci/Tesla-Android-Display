@@ -10,7 +10,8 @@ and see what fps we really get. Phone must stay **unlocked, screen on** — lock
 
 - `CarVpnService` gives the phone the address **7.7.7.8** on a VPN tunnel (only that one address;
   the phone's own internet is untouched). The Tesla browser refuses private IPs but accepts this.
-- The car opens **`http://7.7.7.8.sslip.io/`** (or `:8080` — the app shows the exact link).
+- The car opens **`http://7.7.7.8.sslip.io:7777/`** (the app shows the exact link).
+  Tested on MCU1: a raw IP is refused, and port 80 never reached the phone; a name + port 7777 works.
   sslip.io is a public DNS name that just resolves to 7.7.7.8; the video never leaves the hotspot.
 - `StreamService` captures the screen and sends **one JPEG at a time**: the next frame goes only after
   the car says it drew the previous one, and only the newest screen is sent. Delay ≈ one frame.

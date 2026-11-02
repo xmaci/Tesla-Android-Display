@@ -9,8 +9,9 @@ Targets: Tesla MCU1 (Tegra), MCU2 (Intel), MCU3 (Ryzen) · Android 13+ (tested o
 
 | Milestone | State |
 | --- | --- |
-| M0 · Browser capability probe | M0.2 — features measured on MCU1, speed tests pending → [docs/M0-probe.md](docs/M0-probe.md) |
-| M1 · Core streaming | next, after M0 results |
+| M0 · Browser capability probe | done on MCU1 → [docs/M0-probe.md](docs/M0-probe.md) |
+| M1a · Phone screen on the car, flow-controlled JPEG + touch | ready to test → [docs/M1a.md](docs/M1a.md) |
+| M1 · Virtual display, locked phone, live touch, partial updates | next |
 | M2 · Automation, UI, audio (MVP) | planned |
 | M3 · Phase 2 (anti-jamming, voice, extras) | planned |
 | M4 · Phase 3 | planned |
@@ -18,9 +19,11 @@ Targets: Tesla MCU1 (Tegra), MCU2 (Intel), MCU3 (Ryzen) · Android 13+ (tested o
 ## Layout
 
 ```
+android/              Kotlin app (M1a): VPN car address, screen capture, server, touch
+web/car/              car client page (ES5), bundled into the APK
 web/probe/            M0 probe page (ES5) + test assets
 tools/probe-server/   phone-side test server (Python, stdlib only)
 docs/                 UA + EN docs
 ```
 
-Planned: `android/` (Kotlin app), `web/legacy/` (MCU1 client), `web/modern/` (MCU2/3 client).
+Build: `cd android && ./gradlew assembleDebug` (JDK 17+, Android SDK 35) → `app/build/outputs/apk/debug/app-debug.apk`.

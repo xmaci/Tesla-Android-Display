@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TeslaDroid</string>
+    <string name="touch_service_label">TeslaDroid · дотик з екрана авто / car screen touch</string>
+    <string name="touch_service_desc">Передає дотики з екрана Tesla на телефон, поки йде трансляція. Нічого не читає й не збирає. · Passes taps from the Tesla screen to this phone while streaming. It does not read or collect anything.</string>
+</resources>

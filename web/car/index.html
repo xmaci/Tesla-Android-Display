@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeslaDroid</title>
+<!--
+  M1a car client. Plain ES5 for the MCU1 browser (QtCarBrowser / WebKit 601).
+  One frame in flight: decode -> draw -> "ack" -> the phone sends the newest screen.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font-family: Arial, Helvetica, sans-serif; overflow: hidden; }
+  #bar { height: 64px; display: flex; align-items: center; background: #161616; border-bottom: 1px solid #2a2a2a; padding: 0 8px; }
+  #bar button { font-size: 22px; min-width: 76px; height: 52px; margin-right: 8px; background: #2b2b2b; color: #eee; border: 0; border-radius: 8px; }
+  #bar select { font-size: 18px; height: 44px; margin-right: 8px; background: #2b2b2b; color: #eee; border: 0; border-radius: 6px; }
+  #stats { flex: 1; text-align: right; font-size: 16px; color: #9a9a9a; white-space: nowrap; overflow: hidden; }
+  #wrap { position: absolute; top: 65px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
+  #screen { background: #050505; display: block; }
+  #msg { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 26px; color: #888; }
+  .dot { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 18px; background: rgba(42,111,219,0.6); pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="kBack">◀</button>
+  <button id="kHome">●</button>
+  <button id="kRecents">▢</button>
+  <button id="kNotif">☰</button>
+  <select id="selW">
+    <option value="320">320</option>
+    <option value="432">432</option>
+    <option value="540">540</option>
+    <option value="720">720</option>
+  </select>
+  <select id="selQ">
+    <option value="35">q35</option>
+    <option value="50">q50</option>
+    <option value="65">q65</option>
+  </select>
+  <div id="stats">…</div>
+</div>
+<div id="wrap"><canvas id="screen" width="432" height="960"></canvas></div>
+<div id="msg">Підключення… · Connecting…</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('screen');
+  var ctx = canvas.getContext('2d');
+  var wrap = document.getElementById('wrap');
+  var msg = document.getElementById('msg');
+  var statsEl = document.getElementById('stats');
+  var URLx = window.URL || window.webkitURL;
+  var ws = null, retry = null;
+  var frames = 0, lastFpsT = now(), localFps = 0, lastDecode = 0;
+  var server = {};
+
+  function now() { return (window.performance && performance.now) ? performance.now() : new Date().getTime(); }
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function load(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
+
+  var selW = document.getElementById('selW'), selQ = document.getElementById('selQ');
+  selW.value = load('td_w', '432');
+  selQ.value = load('td_q', '50');
+  function sendCfg() { if (ws && ws.readyState === 1) { ws.send('cfg:' + selW.value + ':' + selQ.value); } }
+  selW.onchange = function () { store('td_w', selW.value); sendCfg(); };
+  selQ.onchange = function () { store('td_q', selQ.value); sendCfg(); };
+
+  // ---- layout: fit the frame into the area below the bar, keep aspect ----
+  function fit() {
+    var aw = wrap.clientWidth, ah = wrap.clientHeight;
+    var fw = canvas.width, fh = canvas.height;
+    var s = Math.min(aw / fw, ah / fh);
+    canvas.style.width = Math.floor(fw * s) + 'px';
+    canvas.style.height = Math.floor(fh * s) + 'px';
+  }
+  window.onresize = fit;
+  fit();
+
+  // ---- connection ----
+  function connect() {
+    retry = null;
+    try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { schedule(); return; }
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = function () { msg.style.display = 'none'; sendCfg(); };
+    ws.onclose = function () { msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); };
+    ws.onerror = function () {};
+    ws.onmessage = onMessage;
+  }
+  function schedule() { if (!retry) { retry = setTimeout(connect, 1500); } }
+
+  function onMessage(ev) {
+    if (typeof ev.data === 'string') {
+      if (ev.data.indexOf('s:') === 0) { try { server = JSON.parse(ev.data.substr(2)); } catch (e) {} showStats(); }
+      return;
+    }
+    var buf = ev.data;
+    var dv = new DataView(buf);
+    var seq = dv.getUint32(0), w = dv.getUint16(4), h = dv.getUint16(6);
+    var t0 = now();
+    var blob = new Blob([buf.slice(12)], { type: 'image/jpeg' });
+    var url = URLx.createObjectURL(blob);
+    var img = new Image();
+    img.onload = function () {
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; fit(); }
+      ctx.drawImage(img, 0, 0);
+      URLx.revokeObjectURL(url);
+      lastDecode = Math.round(now() - t0);
+      ack(seq);
+      frames++;
+    };
+    img.onerror = function () { URLx.revokeObjectURL(url); ack(seq); };
+    img.src = url;
+  }
+  function ack(seq) { if (ws && ws.readyState === 1) { ws.send('ack:' + seq + ':' + lastDecode); } }
+
+  function showStats() {
+    var t = now();
+    if (t - lastFpsT >= 1000) { localFps = frames * 1000 / (t - lastFpsT); frames = 0; lastFpsT = t; }
+    statsEl.innerHTML = (Math.round(localFps * 10) / 10) + ' fps · ' + (server.lat || 0) + ' ms · decode ' + lastDecode +
+      ' ms · ' + (server.kb || 0) + ' KB · ' + (server.w || canvas.width) + '×' + (server.h || canvas.height) +
+      (server.touch ? '' : ' · дотик вимкнено / touch off');
+  }
+
+  // ---- touch: normalised 0..1 coordinates, moves throttled to ~20/s ----
+  var lastMove = 0;
+  function pos(clientX, clientY) {
+    var r = canvas.getBoundingClientRect();
+    var x = (clientX - r.left) / r.width, y = (clientY - r.top) / r.height;
+    return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)), cx: clientX, cy: clientY };
+  }
+  function sendTouch(kind, p) {
+    if (ws && ws.readyState === 1) { ws.send('t:' + kind + ':' + p.x.toFixed(4) + ':' + p.y.toFixed(4)); }
+  }
+  function dot(p) {
+    var d = document.createElement('div'); d.className = 'dot';
+    d.style.left = p.cx + 'px'; d.style.top = p.cy + 'px';
+    document.body.appendChild(d);
+    setTimeout(function () { if (d.parentNode) { d.parentNode.removeChild(d); } }, 350);
+  }
+  var lastP = null;
+  canvas.addEventListener('touchstart', function (e) {
+    var t = e.changedTouches[0]; lastP = pos(t.clientX, t.clientY); sendTouch('d', lastP); dot(lastP); e.preventDefault();
+  }, false);
+  canvas.addEventListener('touchmove', function (e) {
+    var t = e.changedTouches[0]; lastP = pos(t.clientX, t.clientY);
+    var n = now(); if (n - lastMove > 50) { lastMove = n; sendTouch('m', lastP); }
+    e.preventDefault();
+  }, false);
+  canvas.addEventListener('touchend', function (e) {
+    var t = e.changedTouches[0]; lastP = pos(t.clientX, t.clientY); sendTouch('u', lastP); e.preventDefault();
+  }, false);
+  // Mouse fallback (desktop testing)
+  var mouseDown = false;
+  canvas.addEventListener('mousedown', function (e) { mouseDown = true; var p = pos(e.clientX, e.clientY); sendTouch('d', p); dot(p); }, false);
+  canvas.addEventListener('mousemove', function (e) { if (!mouseDown) { return; } var n = now(); if (n - lastMove > 50) { lastMove = n; sendTouch('m', pos(e.clientX, e.clientY)); } }, false);
+  window.addEventListener('mouseup', function (e) { if (!mouseDown) { return; } mouseDown = false; sendTouch('u', pos(e.clientX, e.clientY)); }, false);
+
+  function key(name) { return function () { if (ws && ws.readyState === 1) { ws.send('k:' + name); } }; }
+  document.getElementById('kBack').onclick = key('back');
+  document.getElementById('kHome').onclick = key('home');
+  document.getElementById('kRecents').onclick = key('recents');
+  document.getElementById('kNotif').onclick = key('notifications');
+
+  connect();
+})();
+</script>
+</body>
+</html>

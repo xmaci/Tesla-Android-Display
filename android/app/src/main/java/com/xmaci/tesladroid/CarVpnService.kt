@@ -9,7 +9,7 @@ import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
-import java.io.FileInputStream
+import android.system.OsConstants
 
 /**
  * Puts a non-private address (default 7.7.7.8/32) on a TUN interface.
@@ -25,6 +25,8 @@ class CarVpnService : VpnService() {
         private const val TAG = "TeslaDroid"
         private const val CHANNEL = "vpn"
         private const val NOTIF_ID = 2
+        /** Second tunnel's address; it becomes the active VPN instead of the car address. */
+        private const val HELPER_IP = "192.168.229.230"
 
         @Volatile var running = false
             private set
@@ -45,14 +47,24 @@ class CarVpnService : VpnService() {
         }
     }
 
-    private var tun: ParcelFileDescriptor? = null
-    private var drainThread: Thread? = null
+    private var tun: ParcelFileDescriptor? = null      // car address, e.g. 7.7.7.8
+    private var tun2: ParcelFileDescriptor? = null     // helper tunnel that becomes the active VPN
 
     override fun onCreate() {
         super.onCreate()
         instance = this
     }
 
+    /**
+     * Two tunnels, as NavMirror does (MIT, github.com/ShineCharon/NavMirror):
+     *
+     * Android drops packets that arrive on another interface (the hotspot) but are addressed
+     * to the *active* VPN's own address. Establishing a second interface makes that one the
+     * active VPN; the first interface stays up with the car address as an ordinary local
+     * address, so the car's packets are delivered to our 0.0.0.0 server.
+     * Nothing is read from the tunnels; the phone's own traffic is untouched (allowBypass,
+     * /32 routes only).
+     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         val ip = Config.ip(this)
@@ -64,12 +76,18 @@ class CarVpnService : VpnService() {
                 .addRoute(ip, 32)
                 .setMtu(1500)
                 .allowBypass()
-                .setBlocking(true)
-                // Our own sockets (the server's replies to the car) must not be routed into
-                // this tunnel, where they would be read and dropped.
-                .addDisallowedApplication(packageName)
+                .allowFamily(OsConstants.AF_INET)
+                .allowFamily(OsConstants.AF_INET6)
                 .establish()
-            if (tun == null) {
+            tun2 = Builder()
+                .setSession("TeslaDroid · helper")
+                .addAddress(HELPER_IP, 32)
+                .addRoute(HELPER_IP, 32)
+                .setMtu(1500)
+                .allowBypass()
+                .allowFamily(OsConstants.AF_INET)
+                .establish()
+            if (tun == null && tun2 == null) {
                 lastError = "VPN permission not granted"
                 stopSelf()
                 return START_NOT_STICKY
@@ -77,8 +95,7 @@ class CarVpnService : VpnService() {
             address = ip
             running = true
             lastError = ""
-            startDrain()
-            Log.i(TAG, "car link up on $ip/32")
+            Log.i(TAG, "car link up on $ip/32 (+ helper $HELPER_IP)")
         } catch (t: Throwable) {
             lastError = t.message ?: t.toString()
             Log.e(TAG, "VPN establish failed", t)
@@ -88,28 +105,12 @@ class CarVpnService : VpnService() {
         return START_STICKY
     }
 
-    /** Packets the phone itself sends to the /32 land in the TUN; read and drop them. */
-    private fun startDrain() {
-        val fd = tun ?: return
-        drainThread = Thread({
-            val buf = ByteArray(32 * 1024)
-            try {
-                FileInputStream(fd.fileDescriptor).use { input ->
-                    while (!Thread.currentThread().isInterrupted) {
-                        if (input.read(buf) < 0) break
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-        }, "vpn-drain").apply { isDaemon = true; start() }
-    }
-
     fun shutdown() {
         running = false
-        drainThread?.interrupt()
-        drainThread = null
         try { tun?.close() } catch (_: Throwable) {}
+        try { tun2?.close() } catch (_: Throwable) {}
         tun = null
+        tun2 = null
     }
 
     override fun onRevoke() {

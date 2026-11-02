@@ -33,6 +33,7 @@
   <button id="bN" class="opt">×2</button>
   <button id="bF" class="opt">fit</button>
   <div id="stats">…</div>
+  <div id="ver" style="font-size:12px;color:#666;margin-left:8px">v0.3.5</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"></div>
 <div id="msg">Підключення… · Connecting…</div>
@@ -262,22 +263,18 @@
   // ---- bar buttons: one action per tap. MCU1 fires touch + emulated click for one tap,
   // so act on touchend and swallow the click that follows; plain click still works on desktop.
   function onTap(el, fn) {
-    // pendingTouch: a touch on this button already acted; the emulated click that MCU1 sends
-    // afterwards can arrive much later (e.g. after a heavy re-layout), so swallow the next click
-    // whenever it comes, regardless of timing. Cleared after 3 s in case no click follows.
-    var pendingTouch = false, clearT = null;
-    el.addEventListener('touchend', function (e) {
-      e.preventDefault();
-      pendingTouch = true;
-      if (clearT) { clearTimeout(clearT); }
-      clearT = setTimeout(function () { pendingTouch = false; }, 3000);
+    // MCU1 can deliver one tap as touchend + one or more emulated clicks, sometimes much later.
+    // Rule: a button acts at most once per second, whatever event arrives.
+    var last = -10000;
+    function fire(e) {
+      if (e) { e.preventDefault(); }
+      var n = now();
+      if (n - last < 1000) { return; }
+      last = n;
       fn();
-    }, false);
-    el.addEventListener('click', function (e) {
-      e.preventDefault();
-      if (pendingTouch) { pendingTouch = false; return; }
-      fn();
-    }, false);
+    }
+    el.addEventListener('touchend', fire, false);
+    el.addEventListener('click', fire, false);
   }
   function key(name) { return function () { if (ws && ws.readyState === 1) { ws.send('k:' + name); } }; }
   onTap(document.getElementById('kBack'), key('back'));

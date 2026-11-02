@@ -63,7 +63,7 @@ class MainActivity : Activity() {
             Button(this).apply { text = s; isAllCaps = false; setOnClickListener { onClick() } }
                 .also { col.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
-        text("TeslaDroid · M1 · 0.3.4", 26f, true)
+        text("TeslaDroid · M1 · 0.3.5", 26f, true)
         text("Екран телефона на Tesla · Phone screen on the Tesla", 14f, color = Color.GRAY)
 
         text("1. Дотик з екрана авто · Touch from the car screen", 17f, true)

@@ -234,6 +234,14 @@ the car's settings say "not mjpeg"; the page swaps the stream for a 1×1 inline 
 2. WebSocket fragmented messages (FIN clear + continuation frames) were dropped or cut; a large `prof:`
    message could arrive fragmented. Server now reassembles, with pings in between (unit test added).
 
+## 0.5.10 — third review
+
+Small fixes only: buffered frames' object URLs were not freed on reconnect (leaked JPEG memory with the
+frame buffer on); profile JSON had `maxFps: null` when Max fps = Auto.
+Reviewed without findings: CarServer (HTTP, WebSocket framing, send locking), StreamService (start/stop,
+capture, canvas sender, MJPEG loop, cfg/ack/touch handling, rotation, pacing), TouchService, CarVpnService,
+helper ping timeouts, car page (settings, layout, touch, keys, buffer, profiler, watchdog, load reports).
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

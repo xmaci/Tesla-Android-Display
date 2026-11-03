@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.5.9</div>
+  <div id="ver">v0.5.10</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -237,6 +237,8 @@
     try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { schedule(); return; }
     ws.binaryType = 'arraybuffer';
     ws.onopen = function () {
+      // Buffered frames of the old connection: free their image data (object URLs hold the JPEG bytes).
+      for (var i = 0; i < ready.length; i++) { URLx.revokeObjectURL(ready[i].url); release(ready[i].img); }
       queue = []; decoding = false; ready = []; playing = false;
       if (presentTimer) { clearTimeout(presentTimer); presentTimer = null; }
       connGen++;
@@ -489,7 +491,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.5.9 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.5.10 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -508,8 +510,8 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.5.9', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
-                    q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: +set.f, secs: Math.round(secs * 10) / 10,
+    var payload = { v: '0.5.10', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+                    q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,
                     cols: ['seq', 'bytes', 'area%', 'queue', 'decode', 'hold', 'draw', 'paint', 'gap', 'more', 'shownGap'],

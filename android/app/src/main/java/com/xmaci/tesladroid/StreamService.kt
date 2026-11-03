@@ -109,7 +109,7 @@ class StreamService : Service(), CarServer.Listener {
     /** Auto pacing (maxFps < 0): the car reports how late its page timers fire ("load"); the MJPEG rate
      *  follows so the browser is never fed more frames than it can decode and paint. MCU1 measured: at
      *  432×960 × 13 fps its page froze for 1.3–1.5 s at a time. */
-    @Volatile private var autoFps = 8.0
+    @Volatile private var autoFps = 12.0
     @Volatile private var carLag = 0
     @Volatile private var lastLoadAt = 0L
     @Volatile private var lastSilentStep = 0L
@@ -117,17 +117,19 @@ class StreamService : Service(), CarServer.Listener {
     @Synchronized private fun onCarLoad(lag: Int) {
         carLag = lag; lastLoadAt = SystemClock.uptimeMillis()
         if (maxFps >= 0) return
+        // MCU1's page lags ~100-200 ms even at 2 fps (measured), so only real overload counts:
+        // 432x960 x 13 fps froze it 1.3-1.5 s, 320x710 x 13 fps stayed near 200 ms and felt smooth.
         autoFps = when {
-            lag > 150 -> autoFps * 0.6
-            lag > 80 -> autoFps * 0.85
-            lag < 40 -> autoFps + 1
+            lag > 600 -> autoFps * 0.6
+            lag > 300 -> autoFps * 0.85
+            lag < 200 -> autoFps + 1
             else -> autoFps
-        }.coerceIn(2.0, 30.0)
+        }.coerceIn(5.0, 20.0)
     }
     /** No load report for 2.5 s = the car page is frozen: slow down without waiting for it. */
     @Synchronized private fun checkCarSilent(now: Long) {
         if (maxFps >= 0 || !mjpegMode || lastLoadAt == 0L) return
-        if (now - lastLoadAt > 2500 && now - lastSilentStep > 1000) { autoFps = (autoFps * 0.7).coerceAtLeast(2.0); lastSilentStep = now }
+        if (now - lastLoadAt > 2500 && now - lastSilentStep > 1000) { autoFps = (autoFps * 0.7).coerceAtLeast(5.0); lastSilentStep = now }
     }
     @Volatile private var motion = false
     private var motionStreak = 0

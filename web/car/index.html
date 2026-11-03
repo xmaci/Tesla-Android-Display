@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.5.3</div>
+  <div id="ver">v0.5.4</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -118,7 +118,7 @@
     a: param('auto') || load('a2', '0'),       // Auto resolution: off by default (resizing caused stutter)
     v: param('mode') || load('v', 'mjpeg'),
     s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
-    f: param('fps') || load('f2', 'a'),         // MJPEG frame cap; 0 = none, a = follow the car's load
+    f: param('fps') || load('f3', '15'),         // MJPEG frame cap; 0 = none, a = follow the car's load
     b: param('buf') || load('b', '0')           // frame buffer in canvas views: 0 off, 1, 2, a = auto
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
@@ -167,7 +167,7 @@
   }
   function choose(key, val) {
     if (set[key] === val) { return; }
-    set[key] = val; store(key === 'a' ? 'a2' : key === 'f' ? 'f2' : key, val); markOptions();
+    set[key] = val; store(key === 'a' ? 'a2' : key === 'f' ? 'f3' : key, val); markOptions();
     if (key === 'v') { layout(); }
     if (key === 's') { applyScaling(); return; }
     if (key === 'b') { tick(); return; }
@@ -485,7 +485,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.5.3 · ' + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.5.4 · ' + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -504,7 +504,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.5.3', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.5.4', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

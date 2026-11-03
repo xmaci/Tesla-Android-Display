@@ -186,6 +186,14 @@ the limit; the canvas path is far worse than MJPEG.
 phone lowers the MJPEG rate (×0.6 above 150 ms, ×0.85 above 80 ms, +1 fps below 40 ms, 2–30 fps) and also
 slows down when no report arrives for 2.5 s. Stats show `pace N lag M`. Defaults for new installs: 320 px, q25.
 
+## 0.5.4 — Auto pacing was too eager
+
+Field test of 0.5.3: Auto pushed the rate to 2 fps. MCU1's page lags ~85–105 ms (p95) even at 2 fps, so the
+80/150 ms thresholds always fired. A fixed 15 fps at 320 px felt smoother. Now: default Max fps 15;
+Auto reacts only to real overload (>300 ms slow down, >600 ms ×0.6, <200 ms +1) within 5–20 fps.
+Note: the profiler's "shown fps" samples only the picture centre; in Waze the centre (the car arrow)
+barely changes, so that number undercounts. Use feel + js lag.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

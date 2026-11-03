@@ -150,6 +150,8 @@ class StreamService : Service(), CarServer.Listener {
     @Volatile private var partialOk = true          // car can draw sub-rectangles (not in 'img' mode)
     @Volatile private var mjpegMode = false         // car shows the /mjpeg stream: WebSocket sends no frames
     @Volatile private var mjpegGen = 0              // newest /mjpeg client wins
+    @Volatile private var lastCfgAt = 0L            // when the car last sent its settings
+    private val mjOpen = java.util.concurrent.atomic.AtomicInteger(0)   // MJPEG streams being sent now
     @Volatile private var forceFull = true          // next frame must be complete (connect, resize, car request)
     private var shown: IntArray? = null             // car-side picture, frameW*frameH
     private var spare: IntArray? = null             // reused buffer for the next capture
@@ -420,11 +422,11 @@ class StreamService : Service(), CarServer.Listener {
             val sent = stSent.coerceAtLeast(1)
             json = ("{\"fps\":%.1f,\"lat\":%d,\"kb\":%d,\"enc\":%d,\"dec\":%d,\"draw\":%d,\"wait\":%d," +
                 "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b," +
-                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d}").format(
+                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d,\"mjs\":%d}").format(
                 java.util.Locale.US, stFrames / secs, lat, (stBytes / sent / 1024), stEnc / sent, dec, draw, wait,
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, frameH, quality, window,
                 TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail,
-                if (mjpegMode) effectiveFps() else 0, carLag)
+                if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get())
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
             stArea = 0; stSent = 0; stIdle = 0
@@ -448,6 +450,8 @@ class StreamService : Service(), CarServer.Listener {
     override fun onHttp(path: String, sock: java.net.Socket, out: java.io.OutputStream): Boolean {
         if (path != "/mjpeg") return false
         val gen = ++mjpegGen
+        val startedAt = SystemClock.uptimeMillis()
+        mjOpen.incrementAndGet()
         try {
             sock.tcpNoDelay = true
             sock.sendBufferSize = 32 * 1024
@@ -459,6 +463,10 @@ class StreamService : Service(), CarServer.Listener {
             var lastSent = -1L
             var lastWrite = 0L
             while (running && gen == mjpegGen && !sock.isClosed) {
+                // The car switched to a canvas view: end this stream. Old WebKit may keep a hidden
+                // multipart <img> loading, and decoding it in the background starved the canvas views
+                // (1:1 fell to ~1 fps on MCU1 after MJPEG was added).
+                if (!mjpegMode && lastCfgAt > startedAt) break
                 var copy: Bitmap? = null
                 synchronized(lock) {
                     val idle = SystemClock.uptimeMillis() - lastWrite
@@ -510,6 +518,7 @@ class StreamService : Service(), CarServer.Listener {
             }
         } catch (_: Exception) {
         } finally {
+            mjOpen.decrementAndGet()
             try { sock.close() } catch (_: Exception) {}
         }
         return true
@@ -553,6 +562,7 @@ class StreamService : Service(), CarServer.Listener {
                 p.getOrNull(2)?.toIntOrNull()?.let { quality = it.coerceIn(20, 90) }
                 p.getOrNull(3)?.toIntOrNull()?.let { window = it.coerceIn(1, 4) }
                 p.getOrNull(4)?.let { partialOk = it == "1"; mjpegMode = it == "m" }
+                lastCfgAt = SystemClock.uptimeMillis()
                 forceFull = true
                 p.getOrNull(5)?.let { maxFps = if (it == "a") -1 else (it.toIntOrNull() ?: 15).coerceIn(0, 60) }
                 p.getOrNull(1)?.toIntOrNull()?.let {

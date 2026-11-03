@@ -207,6 +207,15 @@ listener → resize + full frame); widths 640 and 800 added.
 Removed completely (setting, protocol field, phone code): resizing mid-stream stuttered, and Max fps now
 handles overload. cfg is now `cfg:<width>:<quality>:<window>:<partial|m>:<max fps|a>`.
 
+## 0.5.7 — canvas views starved by a hidden MJPEG stream
+
+Field: 1:1 dropped to ~1 fps (it gave 13.5 fps in 0.2.0 and 6–7 fps later). Cause found in code: since 0.4.1
+the page opens mjpeg by default, and switching to a canvas view only set `mj.src = ''`; the phone's MJPEG
+loop had no stop condition except the socket closing. If old WebKit keeps the hidden multipart load alive,
+the car decodes ~15 invisible frames/s on top of the canvas view. Fix: the phone ends the stream as soon as
+the car's settings say "not mjpeg"; the page swaps the stream for a 1×1 inline GIF. Stats/profile show
+"⚠ mjpeg still open" if a stream is still being sent in a canvas view.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.5.1</div>
+  <div id="ver">v0.5.2</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -70,6 +70,8 @@
     <div class="hint">лише gpu / draw / fit / 1:1 · дотик скидає буфер · only canvas views · a touch empties it</div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
     <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
+  <div class="row"><div class="lbl">Повний екран · Full screen</div><button id="bFull">Спробувати · Try</button>
+    <div class="hint" id="fullRes">MCU1 може не дозволити · MCU1 may refuse</div></div>
   <button id="bClose">✕ Закрити · Close</button>
 </div>
 
@@ -483,7 +485,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.5.1 · ' + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.5.2 · ' + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -502,7 +504,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.5.1', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.5.2', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,
@@ -600,6 +602,25 @@
   onTap(document.getElementById('kHome'), key('home'), 600);
   onTap(document.getElementById('kRecents'), key('recents'), 600);
   onTap(document.getElementById('kNotif'), key('notifications'), 600);
+
+  // ---- full screen: try every API old and new WebKit had; report which one exists and what happened ----
+  function tryFull() {
+    var el = document.documentElement, res = document.getElementById('fullRes'), names =
+      ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
+    var found = [];
+    for (var i = 0; i < names.length; i++) { if (typeof el[names[i]] === 'function') { found.push(names[i]); } }
+    if (!found.length) { res.innerHTML = '✗ браузер не має функції повного екрана · no full-screen API in this browser'; return; }
+    try {
+      var r = found[0] === 'webkitRequestFullScreen' ? el[found[0]](window.Element && Element.ALLOW_KEYBOARD_INPUT) : el[found[0]]();
+      if (r && r.then) { r.then(null, function (e) { res.innerHTML = '✗ ' + found[0] + ': ' + (e && e.name || 'refused'); }); }
+      setTimeout(function () {
+        var on = document.fullscreenElement || document.webkitFullscreenElement || document.webkitCurrentFullScreenElement || document.webkitIsFullScreen;
+        res.innerHTML = (on ? '✓ ' : '✗ ') + found.join(', ') + (on ? ' — працює · works' : ' — є, але машина не дала · exists, car refused');
+        layout();
+      }, 800);
+    } catch (e) { res.innerHTML = '✗ ' + found[0] + ': ' + e.message; }
+  }
+  onTap(document.getElementById('bFull'), tryFull, 1500);
 
   // ---- MJPEG watchdog ----
   // The phone reports how much of the screen really changed ("upd"). If it says the screen moves but the

@@ -230,6 +230,10 @@ class StreamService : Service(), CarServer.Listener {
         display = mp.createVirtualDisplay("TeslaDroid", w, h, dpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, r.surface, null, captureHandler)
 
+        // Phone rotated (e.g. Waze in landscape): follow it, so a landscape screen fills the car's wide
+        // browser area instead of being letterboxed into a portrait frame.
+        getSystemService(DisplayManager::class.java).registerDisplayListener(rotationListener, captureHandler)
+
         server = CarServer({ name -> try { assets.open(name).use { it.readBytes() } } catch (_: java.io.IOException) { null } },
             this, { Log.i(TAG, it) }).also {
             instanceServer = it
@@ -244,6 +248,21 @@ class StreamService : Service(), CarServer.Listener {
         running = true
         status = "streaming"
         sender = Thread({ sendLoop() }, "sender").apply { start() }
+    }
+
+    private val rotationListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) {}
+        override fun onDisplayRemoved(id: Int) {}
+        override fun onDisplayChanged(id: Int) {
+            if (id != Display.DEFAULT_DISPLAY) return
+            val oldW = screenW; val oldH = screenH
+            readScreenSize()
+            if ((oldW > oldH) != (screenW > screenH)) {
+                Log.i(TAG, "rotated: ${screenW}x$screenH")
+                forceFull = true
+                resize(if (motion) (wantWidth * motionScale).toInt() else wantWidth)
+            }
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -653,6 +672,7 @@ class StreamService : Service(), CarServer.Listener {
     }
 
     override fun onDestroy() {
+        try { getSystemService(DisplayManager::class.java).unregisterDisplayListener(rotationListener) } catch (_: Exception) {}
         shutdown()
         captureThread.quitSafely()
         super.onDestroy()

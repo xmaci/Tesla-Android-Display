@@ -194,6 +194,14 @@ Auto reacts only to real overload (>300 ms slow down, >600 ms ×0.6, <200 ms +1)
 Note: the profiler's "shown fps" samples only the picture centre; in Waze the centre (the car arrow)
 barely changes, so that number undercounts. Use feel + js lag.
 
+## 0.5.5 — landscape phone
+
+Field: 320 px is unusable (too small), 432 freezes MCU1, full screen is not available on MCU1. The browser
+sits in the lower half of the portrait screen: a wide, short area (~1160 × 650). A portrait phone frame
+fitted into it is only ~300 px wide; a landscape frame of the same pixel count fills the width.
+720×324 (233 k px, like 320×710) shows at ~1160×520. The capture now follows phone rotation (display
+listener → resize + full frame); widths 640 and 800 added.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

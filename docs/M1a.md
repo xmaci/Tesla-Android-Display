@@ -225,6 +225,15 @@ the car's settings say "not mjpeg"; the page swaps the stream for a 1×1 inline 
 4. 1:1 taller than the browser area was centred, cutting off the phone's status bar and bottom. Now top-aligned.
 5. After a reconnect, a decode started on the old connection could still draw and ack a stale frame. Ignored now.
 
+## 0.5.9 — second review
+
+1. Watchdog false restarts: since 0.5.1 it sampled only a 96×96 centre crop, so a screen changing only
+   away from the centre (clock, progress bar, a corner video) looked frozen while the phone reported
+   changes → the stream was reopened every ~4 s (a visible blank). The watchdog samples the whole picture
+   again (every 1.3 s, ~10 ms); the profiler keeps the cheap crop. Restart needs ≥20 % changed area.
+2. WebSocket fragmented messages (FIN clear + continuation frames) were dropped or cut; a large `prof:`
+   message could arrive fragmented. Server now reassembles, with pings in between (unit test added).
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

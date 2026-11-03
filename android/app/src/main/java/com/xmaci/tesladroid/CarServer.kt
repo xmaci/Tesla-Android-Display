@@ -163,12 +163,25 @@ class CarServer(
         current = conn
         listener.onOpen(conn)
         try {
+            // A message may arrive in fragments (FIN bit clear, then continuation frames, opcode 0);
+            // control frames (ping/close) may sit between them.
+            var msgOp = 0
+            val msg = java.io.ByteArrayOutputStream()
             while (true) {
-                val (op, data) = readFrame(input) ?: break
-                when (op) {
-                    0x1 -> listener.onText(conn, String(data, Charsets.UTF_8))
+                val f = readFrame(input) ?: break
+                when (f.op) {
                     0x8 -> break
-                    0x9 -> conn.send(0xA, data)
+                    0x9 -> conn.send(0xA, f.data)
+                    0xA -> {}
+                    else -> {
+                        if (f.op != 0) { msgOp = f.op; msg.reset() }
+                        msg.write(f.data)
+                        if (msg.size() > MAX_FRAME) throw IOException("message too large")
+                        if (f.fin) {
+                            if (msgOp == 0x1) listener.onText(conn, String(msg.toByteArray(), Charsets.UTF_8))
+                            msg.reset(); msgOp = 0
+                        }
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -179,8 +192,10 @@ class CarServer(
         }
     }
 
+    private class Frame(val fin: Boolean, val op: Int, val data: ByteArray)
+
     /** Reads one client frame (always masked, small text control messages). */
-    private fun readFrame(input: InputStream): Pair<Int, ByteArray>? {
+    private fun readFrame(input: InputStream): Frame? {
         val b1 = input.read()
         val b2 = input.read()
         if (b1 < 0 || b2 < 0) return null
@@ -197,7 +212,7 @@ class CarServer(
         val mask = if (b2 and 0x80 != 0) readN(input, 4) else null
         val data = readN(input, len.toInt())
         if (mask != null) for (i in data.indices) data[i] = (data[i].toInt() xor mask[i % 4].toInt()).toByte()
-        return Pair(b1 and 0x0F, data)
+        return Frame(b1 and 0x80 != 0, b1 and 0x0F, data)
     }
 
     private fun readN(input: InputStream, n: Int): ByteArray {

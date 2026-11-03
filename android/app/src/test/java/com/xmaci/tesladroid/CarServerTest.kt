@@ -75,4 +75,36 @@ class CarServerTest {
             }
         } finally { srv.stop() }
     }
+
+    @Test fun fragmentedTextWithPingInBetween() {
+        val got = CountDownLatch(1)
+        var received = ""
+        val srv = startServer(object : CarServer.Listener {
+            override fun onOpen(conn: CarServer.Conn) {}
+            override fun onText(conn: CarServer.Conn, text: String) { received = text; got.countDown() }
+            override fun onClose(conn: CarServer.Conn) {}
+        })
+        fun masked(b0: Int, payload: ByteArray): ByteArray {
+            val mask = byteArrayOf(1, 2, 3, 4)
+            return byteArrayOf(b0.toByte(), (0x80 or payload.size).toByte()) + mask +
+                ByteArray(payload.size) { (payload[it].toInt() xor mask[it % 4].toInt()).toByte() }
+        }
+        try {
+            Socket("127.0.0.1", 18765).use { s ->
+                val key = Base64.getEncoder().encodeToString(ByteArray(16) { it.toByte() })
+                s.getOutputStream().write(("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n\r\n").toByteArray())
+                val input = DataInputStream(s.getInputStream())
+                val head = StringBuilder()
+                while (!head.endsWith("\r\n\r\n")) head.append(input.readByte().toInt().toChar())
+                val out = s.getOutputStream()
+                out.write(masked(0x01, "prof:{\"a\":".toByteArray()))      // text, FIN clear
+                out.write(masked(0x89, "hi".toByteArray()))                  // ping in between
+                out.write(masked(0x80, "1}".toByteArray()))                  // continuation, FIN set
+                assertTrue(got.await(3, TimeUnit.SECONDS))
+                assertEquals("prof:{\"a\":1}", received)
+                assertEquals(0x8A, input.readUnsignedByte())                  // pong
+            }
+        } finally { srv.stop() }
+    }
 }

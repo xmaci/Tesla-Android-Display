@@ -169,6 +169,23 @@ repainting the CSS-scaled 432×960 canvas. The frame buffer adds 265 ms and gain
 0.5.1: the sampler copies a 96×96 crop (was: whole frame scaled, ~10 ms per sample) and reports how many
 fps it could possibly see.
 
+## Second MCU1 profiles (0.5.1, Waze, browser in the lower half)
+
+| View | size | js lag p95 | stalls >100 ms | note |
+| --- | --- | --- | --- | --- |
+| mjpeg q25 | 320×710 | 196 ms | 19 | page alive, ~8 samples/s |
+| mjpeg q25 | 432×960 | 1544 ms | 5 (each 1+ s) | page frozen |
+| mj1:1 q25 | 432×960 | 1293 ms | 5 | no scaling, still frozen → pixel count, not scaling |
+| 1:1 canvas q35 | 432×960 | 735 ms | 11 | 1.1 fps, decode 1138 ms |
+
+The phone sent ~13 fps every time and its TCP send never blocked (wait 0 ms): the browser keeps reading
+the stream but cannot decode and paint 432×960 at 13 fps, so its page thread freezes. Pixels per second is
+the limit; the canvas path is far worse than MJPEG.
+
+0.5.3: **Max fps = Auto** (new default). The page reports every second how late a 100 ms timer fired; the
+phone lowers the MJPEG rate (×0.6 above 150 ms, ×0.85 above 80 ms, +1 fps below 40 ms, 2–30 fps) and also
+slows down when no report arrives for 2.5 s. Stats show `pace N lag M`. Defaults for new installs: 320 px, q25.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

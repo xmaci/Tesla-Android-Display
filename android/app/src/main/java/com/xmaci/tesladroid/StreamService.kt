@@ -37,7 +37,7 @@ import java.nio.ByteOrder
  * so delay stays at about one frame instead of growing (the 15 s seen with other apps).
  *
  * Protocol (WebSocket /ws)
- *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<auto 1|0>:<max fps, 0 = no cap>"   frame width, JPEG quality,
+ *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<auto 1|0>:<max fps, 0 = no cap, a = follow car load>"   frame width, JPEG quality,
  *                 frames in flight, sub-rects ok (m = MJPEG view), adaptive resolution on/off
  *                 "full"                    car lost its picture (resized canvas): send a complete frame
  *                 "ack:<seq>:<decodeMs>:<drawMs>:<waitMs>:<shown>"   frame handled (shown=0: skipped, newer one queued)
@@ -106,6 +106,29 @@ class StreamService : Service(), CarServer.Listener {
     /** MJPEG frame cap (0 = none). Old WebKit may restart decoding on every new part and never paint
      *  if parts arrive faster than it can draw; a cap leaves it time to show each frame. */
     @Volatile private var maxFps = 20
+    /** Auto pacing (maxFps < 0): the car reports how late its page timers fire ("load"); the MJPEG rate
+     *  follows so the browser is never fed more frames than it can decode and paint. MCU1 measured: at
+     *  432×960 × 13 fps its page froze for 1.3–1.5 s at a time. */
+    @Volatile private var autoFps = 8.0
+    @Volatile private var carLag = 0
+    @Volatile private var lastLoadAt = 0L
+    @Volatile private var lastSilentStep = 0L
+    private fun effectiveFps(): Int = if (maxFps < 0) autoFps.toInt() else maxFps
+    @Synchronized private fun onCarLoad(lag: Int) {
+        carLag = lag; lastLoadAt = SystemClock.uptimeMillis()
+        if (maxFps >= 0) return
+        autoFps = when {
+            lag > 150 -> autoFps * 0.6
+            lag > 80 -> autoFps * 0.85
+            lag < 40 -> autoFps + 1
+            else -> autoFps
+        }.coerceIn(2.0, 30.0)
+    }
+    /** No load report for 2.5 s = the car page is frozen: slow down without waiting for it. */
+    @Synchronized private fun checkCarSilent(now: Long) {
+        if (maxFps >= 0 || !mjpegMode || lastLoadAt == 0L) return
+        if (now - lastLoadAt > 2500 && now - lastSilentStep > 1000) { autoFps = (autoFps * 0.7).coerceAtLeast(2.0); lastSilentStep = now }
+    }
     @Volatile private var motion = false
     private var motionStreak = 0
     private var calmSince = 0L
@@ -387,10 +410,11 @@ class StreamService : Service(), CarServer.Listener {
             val sent = stSent.coerceAtLeast(1)
             json = ("{\"fps\":%.1f,\"lat\":%d,\"kb\":%d,\"enc\":%d,\"dec\":%d,\"draw\":%d,\"wait\":%d," +
                 "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b," +
-                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"motion\":%b}").format(
+                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"motion\":%b,\"pace\":%d,\"lag\":%d}").format(
                 java.util.Locale.US, stFrames / secs, lat, (stBytes / sent / 1024), stEnc / sent, dec, draw, wait,
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, frameH, quality, window,
-                TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail, motion)
+                TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail, motion,
+                if (mjpegMode) effectiveFps() else 0, carLag)
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
             stArea = 0; stSent = 0; stIdle = 0
@@ -496,7 +520,8 @@ class StreamService : Service(), CarServer.Listener {
                     stDecode += 0
                 }
                 maybeStats()
-                val cap = maxFps
+                checkCarSilent(SystemClock.uptimeMillis())
+                val cap = effectiveFps()
                 if (cap > 0) {
                     val left = 1000L / cap - (SystemClock.uptimeMillis() - t0)
                     if (left > 0) Thread.sleep(left)
@@ -548,7 +573,7 @@ class StreamService : Service(), CarServer.Listener {
                 p.getOrNull(3)?.toIntOrNull()?.let { window = it.coerceIn(1, 4) }
                 p.getOrNull(4)?.let { partialOk = it == "1"; mjpegMode = it == "m" }
                 forceFull = true
-                p.getOrNull(6)?.toIntOrNull()?.let { maxFps = it.coerceIn(0, 60) }
+                p.getOrNull(6)?.let { maxFps = if (it == "a") -1 else (it.toIntOrNull() ?: 20).coerceIn(0, 60) }
                 p.getOrNull(5)?.let { val a = it != "0"; if (a != autoRes) { autoRes = a; if (!a && motion) setMotion(false, SystemClock.uptimeMillis()) } }
                 p.getOrNull(1)?.toIntOrNull()?.let {
                     if (it != wantWidth) { wantWidth = it; motion = false; motionStreak = 0; lastResizeAt = SystemClock.uptimeMillis(); resize(it) }
@@ -557,6 +582,7 @@ class StreamService : Service(), CarServer.Listener {
             }
             "full" -> synchronized(lock) { forceFull = true; sentCaptureSeq = 0; lock.notifyAll() }
             "prof" -> saveProfile(text.substring(5))
+            "load" -> p.getOrNull(1)?.toIntOrNull()?.let { onCarLoad(it) }
             "t" -> touch(conn, p)
             "k" -> TouchService.instance?.key(p.getOrNull(1) ?: "")
         }

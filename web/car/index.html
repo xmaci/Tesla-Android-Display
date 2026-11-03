@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.5.2</div>
+  <div id="ver">v0.5.3</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -108,17 +108,17 @@
     a: ['1', '0'],
     v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img'],
     s: ['fast', 'smooth'],
-    f: ['10', '15', '20', '30', '0'],
+    f: ['a', '5', '10', '15', '20', '30', '0'],
     b: ['0', '1', '2', 'a']
   };
   var set = {
-    w: param('w') || load('w', '432'),
-    q: param('q') || load('q', '35'),
+    w: param('w') || load('w', '320'),
+    q: param('q') || load('q', '25'),
     n: param('n') || load('n', '2'),
     a: param('auto') || load('a2', '0'),       // Auto resolution: off by default (resizing caused stutter)
     v: param('mode') || load('v', 'mjpeg'),
     s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
-    f: param('fps') || load('f', '20'),         // MJPEG frame cap; 0 = none
+    f: param('fps') || load('f2', 'a'),         // MJPEG frame cap; 0 = none, a = follow the car's load
     b: param('buf') || load('b', '0')           // frame buffer in canvas views: 0 off, 1, 2, a = auto
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
@@ -167,7 +167,7 @@
   }
   function choose(key, val) {
     if (set[key] === val) { return; }
-    set[key] = val; store(key === 'a' ? 'a2' : key, val); markOptions();
+    set[key] = val; store(key === 'a' ? 'a2' : key === 'f' ? 'f2' : key, val); markOptions();
     if (key === 'v') { layout(); }
     if (key === 's') { applyScaling(); return; }
     if (key === 'b') { tick(); return; }
@@ -179,7 +179,7 @@
   buildOptions('a', 'optA', function (v) { return v === '1' ? 'Auto ✓' : 'Off'; });
   buildOptions('v', 'optV', function (v) { return v; });
   buildOptions('s', 'optS', function (v) { return v === 'fast' ? 'Швидко · Fast' : 'Гладко · Smooth'; });
-  buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v; });
+  buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v === 'a' ? 'Auto' : v; });
   buildOptions('b', 'optB', function (v) { return v === '0' ? 'Off' : v === 'a' ? 'Auto' : v; });
   markOptions(); applyScaling();
   var panelOpen = false;
@@ -485,7 +485,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.5.2 · ' + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.5.3 · ' + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -504,7 +504,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.5.2', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.5.3', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,
@@ -527,7 +527,7 @@
     var fps = isMj() ? (server.fps || 0) : Math.round(localFps * 10) / 10;
     statsEl.innerHTML = fps + ' fps · ' + (isMj() ? 'wait ' : '') + (server.lat || 0) + ' ms · ' +
       (server.kb || 0) + ' KB · upd ' + (server.area || 0) + '% · ' + (server.w || frameW) + '×' + (server.h || frameH) +
-      ' · ' + set.v + (server.motion ? ' ⚡' : '') + (isMj() ? ' · pic ' + picState + (mjRestarts ? ' ↻' + mjRestarts : '') : '') + '<br>' +
+      ' · ' + set.v + (server.motion ? ' ⚡' : '') + (isMj() && server.pace ? ' · pace ' + server.pace + ' lag ' + (server.lag || 0) : '') + (isMj() ? ' · pic ' + picState + (mjRestarts ? ' ↻' + mjRestarts : '') : '') + '<br>' +
       'enc ' + (server.enc || 0) + ' · net ' + (server.net || 0) + ' · wait ' + (server.wait || 0) +
       ' · dec ' + (server.dec || 0) + ' · draw ' + (server.draw || 0) + ' ms · ' + touch;
   }
@@ -602,6 +602,22 @@
   onTap(document.getElementById('kHome'), key('home'), 600);
   onTap(document.getElementById('kRecents'), key('recents'), 600);
   onTap(document.getElementById('kNotif'), key('notifications'), 600);
+
+  // ---- load report: how late a 100 ms timer fires = how busy the page is (MJPEG decode/paint, GC).
+  // Sent every second; the phone lowers the MJPEG rate when the car falls behind (Max fps = Auto).
+  var loadMax = 0, loadSent = now();
+  (function loadLoop() {
+    var expect = now() + 100;
+    setTimeout(function () {
+      var t = now(), late = t - expect;
+      if (late > loadMax) { loadMax = late; }
+      if (t - loadSent >= 1000) {
+        if (ws && ws.readyState === 1 && isMj()) { ws.send('load:' + Math.round(loadMax)); }
+        loadMax = 0; loadSent = t;
+      }
+      loadLoop();
+    }, 100);
+  })();
 
   // ---- full screen: try every API old and new WebKit had; report which one exists and what happened ----
   function tryFull() {

@@ -202,6 +202,11 @@ fitted into it is only ~300 px wide; a landscape frame of the same pixel count f
 720×324 (233 k px, like 320×710) shows at ~1160×520. The capture now follows phone rotation (display
 listener → resize + full frame); widths 640 and 800 added.
 
+## 0.5.6 — Auto resolution removed
+
+Removed completely (setting, protocol field, phone code): resizing mid-stream stuttered, and Max fps now
+handles overload. cfg is now `cfg:<width>:<quality>:<window>:<partial|m>:<max fps|a>`.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

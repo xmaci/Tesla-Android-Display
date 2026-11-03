@@ -37,8 +37,10 @@ import java.nio.ByteOrder
  * so delay stays at about one frame instead of growing (the 15 s seen with other apps).
  *
  * Protocol (WebSocket /ws)
- *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<auto 1|0>:<max fps, 0 = no cap, a = follow car load>"   frame width, JPEG quality,
- *                 frames in flight, sub-rects ok (m = MJPEG view), adaptive resolution on/off
+ *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<max fps, 0 = no cap, a = follow car load>"
+ *                 frame width, JPEG quality, frames in flight, sub-rects ok (m = MJPEG view), MJPEG rate
+ *                 "load:<ms>"               car page lag (worst timer delay in the last second)
+ *                 "prof:<json>"             5 s profile from the car page
  *                 "full"                    car lost its picture (resized canvas): send a complete frame
  *                 "ack:<seq>:<decodeMs>:<drawMs>:<waitMs>:<shown>"   frame handled (shown=0: skipped, newer one queued)
  *                 "t:<d|m|u>:<x>:<y>"       touch, x/y normalised 0..1
@@ -99,10 +101,6 @@ class StreamService : Service(), CarServer.Listener {
     // Requested by the car
     @Volatile private var wantWidth = 432
 
-    // Adaptive resolution: while most of the screen keeps changing (maps, scrolling), capture at
-    // MOTION_SCALE of the chosen width — MCU1 decode cost follows pixel count — and return to full
-    // sharpness once the screen calms down.
-    @Volatile private var autoRes = false
     /** MJPEG frame cap (0 = none). Old WebKit may restart decoding on every new part and never paint
      *  if parts arrive faster than it can draw; a cap leaves it time to show each frame. */
     @Volatile private var maxFps = 20
@@ -131,11 +129,6 @@ class StreamService : Service(), CarServer.Listener {
         if (maxFps >= 0 || !mjpegMode || lastLoadAt == 0L) return
         if (now - lastLoadAt > 2500 && now - lastSilentStep > 1000) { autoFps = (autoFps * 0.7).coerceAtLeast(5.0); lastSilentStep = now }
     }
-    @Volatile private var motion = false
-    private var motionStreak = 0
-    private var calmSince = 0L
-    private var lastResizeAt = 0L
-    private val motionScale = 0.6
     @Volatile private var quality = 50
 
     // Newest captured frame (guarded by lock)
@@ -145,7 +138,6 @@ class StreamService : Service(), CarServer.Listener {
     private var frameW = 0
     private var frameH = 0
     private var captureSeq = 0L
-    @Volatile private var lastCaptureAt = 0L
     private var sentCaptureSeq = 0L
 
     // In-flight tracking
@@ -260,7 +252,7 @@ class StreamService : Service(), CarServer.Listener {
             if ((oldW > oldH) != (screenW > screenH)) {
                 Log.i(TAG, "rotated: ${screenW}x$screenH")
                 forceFull = true
-                resize(if (motion) (wantWidth * motionScale).toInt() else wantWidth)
+                resize(wantWidth)
             }
         }
     }
@@ -318,7 +310,6 @@ class StreamService : Service(), CarServer.Listener {
                 frameH = img.height
                 captureSeq++
                 stCaptured++
-                lastCaptureAt = SystemClock.uptimeMillis()
                 lock.notifyAll()
             }
         } finally {
@@ -341,7 +332,6 @@ class StreamService : Service(), CarServer.Listener {
                 while (it.hasNext()) if (now - it.next().value > 2000) it.remove()
                 val c = conn
                 if (mjpegMode || c == null || !c.open || inFlight.size >= window || captureSeq == sentCaptureSeq || frame == null) {
-                    checkCalm(now)
                     lock.wait(50)
                 } else {
                     crop = Bitmap.createBitmap(frame!!, 0, 0, frameW, frameH)
@@ -411,7 +401,6 @@ class StreamService : Service(), CarServer.Listener {
             synchronized(lock) {
                 stSent++
                 stArea += areaPm
-                noteChange(areaPm, SystemClock.uptimeMillis())
             }
             maybeStats()
         }
@@ -431,10 +420,10 @@ class StreamService : Service(), CarServer.Listener {
             val sent = stSent.coerceAtLeast(1)
             json = ("{\"fps\":%.1f,\"lat\":%d,\"kb\":%d,\"enc\":%d,\"dec\":%d,\"draw\":%d,\"wait\":%d," +
                 "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b," +
-                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"motion\":%b,\"pace\":%d,\"lag\":%d}").format(
+                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d}").format(
                 java.util.Locale.US, stFrames / secs, lat, (stBytes / sent / 1024), stEnc / sent, dec, draw, wait,
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, frameH, quality, window,
-                TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail, motion,
+                TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail,
                 if (mjpegMode) effectiveFps() else 0, carLag)
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
@@ -448,34 +437,6 @@ class StreamService : Service(), CarServer.Listener {
 
     private var mjPrev: IntArray? = null
     private var mjSpare: IntArray? = null
-
-    /** Called with the changed area (per-mille of the frame) of every frame sent. */
-    @Synchronized private fun noteChange(areaPermille: Int, now: Long) {
-        // Each switch resizes the capture (full frame, layout change): never more than once per 5 s.
-        if (!autoRes || now - lastResizeAt < 5000) return
-        if (!motion) {
-            motionStreak = if (areaPermille > 500) motionStreak + 1 else 0
-            if (motionStreak >= 3) setMotion(true, now)
-        } else {
-            if (areaPermille < 200) { if (calmSince == 0L) calmSince = now } else calmSince = 0L
-            checkCalm(now)
-        }
-    }
-
-    /** Back to full sharpness after 3 s of small or no changes (and at least 5 s after the last switch). */
-    @Synchronized private fun checkCalm(now: Long) {
-        if (!motion) return
-        if (now - lastResizeAt < 5000) return
-        if (calmSince == 0L) { if (now - lastChangeAt() > 3000) setMotion(false, now); return }
-        if (now - calmSince > 3000) setMotion(false, now)
-    }
-
-    private fun lastChangeAt(): Long = lastCaptureAt
-
-    private fun setMotion(on: Boolean, now: Long) {
-        motion = on; motionStreak = 0; calmSince = 0L; lastResizeAt = now
-        resize(if (on) (wantWidth * motionScale).toInt() else wantWidth)
-    }
 
     // ---------- MJPEG: frames decoded natively by the car browser, no JavaScript per frame ----------
 
@@ -505,7 +466,7 @@ class StreamService : Service(), CarServer.Listener {
                     if (frame != null && (captureSeq != lastSent || idle > 2000)) {
                         copy = Bitmap.createBitmap(frame!!, 0, 0, frameW, frameH)
                         lastSent = captureSeq
-                    } else { checkCalm(SystemClock.uptimeMillis()); lock.wait(40) }
+                    } else lock.wait(40)
                 }
                 val bmp = copy ?: continue
                 var changed = 1000
@@ -518,7 +479,6 @@ class StreamService : Service(), CarServer.Listener {
                         FrameDiff.changedRect(cur, prev, w, h)?.let { r -> (r[2].toLong() * r[3] * 1000 / (w.toLong() * h)).toInt() } ?: 0
                     mjSpare = prev; mjPrev = cur
                     changed = area
-                    noteChange(area, SystemClock.uptimeMillis())
                 }
                 val t0 = SystemClock.uptimeMillis()
                 buf.reset()
@@ -536,7 +496,7 @@ class StreamService : Service(), CarServer.Listener {
                     stBytes += buf.size()
                     stEnc += enc
                     stSent++
-                    stArea += changed                             // real change, so "upd" shows if the phone sees motion
+                    stArea += changed                             // real change, so "upd" shows if the phone screen changes
                     stLatency += lastWrite - tw                  // time blocked = how far the car lags
                     stDecode += 0
                 }
@@ -594,10 +554,9 @@ class StreamService : Service(), CarServer.Listener {
                 p.getOrNull(3)?.toIntOrNull()?.let { window = it.coerceIn(1, 4) }
                 p.getOrNull(4)?.let { partialOk = it == "1"; mjpegMode = it == "m" }
                 forceFull = true
-                p.getOrNull(6)?.let { maxFps = if (it == "a") -1 else (it.toIntOrNull() ?: 20).coerceIn(0, 60) }
-                p.getOrNull(5)?.let { val a = it != "0"; if (a != autoRes) { autoRes = a; if (!a && motion) setMotion(false, SystemClock.uptimeMillis()) } }
+                p.getOrNull(5)?.let { maxFps = if (it == "a") -1 else (it.toIntOrNull() ?: 15).coerceIn(0, 60) }
                 p.getOrNull(1)?.toIntOrNull()?.let {
-                    if (it != wantWidth) { wantWidth = it; motion = false; motionStreak = 0; lastResizeAt = SystemClock.uptimeMillis(); resize(it) }
+                    if (it != wantWidth) { wantWidth = it; resize(it) }
                 }
                 synchronized(lock) { sentCaptureSeq = 0; lock.notifyAll() }
             }

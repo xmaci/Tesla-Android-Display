@@ -242,6 +242,14 @@ Reviewed without findings: CarServer (HTTP, WebSocket framing, send locking), St
 capture, canvas sender, MJPEG loop, cfg/ack/touch handling, rotation, pacing), TouchService, CarVpnService,
 helper ping timeouts, car page (settings, layout, touch, keys, buffer, profiler, watchdog, load reports).
 
+## 0.6.0 — simple app for a second car
+
+Intel (MCU2, Chrome 148) field result: gpu / 1:1 / fit gave 35–50 fps. For a friend's test the app got one
+screen: big start (green) / stop (red) icon button, the car link, a checklist (hotspot detected from an
+access-point interface, Tesla connected, touch with buttons for "Allow restricted settings" and
+Accessibility, a warning when the phone's own Wi‑Fi is on). Address, helper and diagnostics moved under
+"Advanced". Launcher icon = the start icon. Car page defaults: MCU1 → mjpeg 320 q25, Chromium → gpu 540 q50.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

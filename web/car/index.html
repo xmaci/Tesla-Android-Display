@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.5.10</div>
+  <div id="ver">v0.6.0</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -111,11 +111,14 @@
     f: ['a', '5', '10', '15', '20', '30', '0'],
     b: ['0', '1', '2', 'a']
   };
+  // Defaults by car: MCU1 (QtCarBrowser, Tegra) is slow → small MJPEG; Intel/Ryzen (Chromium) measured
+  // 35–50 fps in gpu / 1:1 / fit → canvas view at a larger size. Saved choices always win.
+  var mcu1 = navigator.userAgent.indexOf('QtCarBrowser') >= 0;
   var set = {
-    w: param('w') || load('w', '320'),
-    q: param('q') || load('q', '25'),
+    w: param('w') || load('w', mcu1 ? '320' : '540'),
+    q: param('q') || load('q', mcu1 ? '25' : '50'),
     n: param('n') || load('n', '2'),
-    v: param('mode') || load('v', 'mjpeg'),
+    v: param('mode') || load('v', mcu1 ? 'mjpeg' : 'gpu'),
     s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
     f: param('fps') || load('f3', '15'),         // MJPEG frame cap; 0 = none, a = follow the car's load
     b: param('buf') || load('b', '0')           // frame buffer in canvas views: 0 off, 1, 2, a = auto
@@ -491,7 +494,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.5.10 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.6.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -510,7 +513,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.5.10', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.6.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

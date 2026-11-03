@@ -1,3 +1,8 @@
+> **0.6.0 — simple screen.** One big button: green ▶ starts, red ■ stops. The car link appears under it,
+> with a short checklist (hotspot, Tesla connected, touch). Helper, car address and diagnostics are under
+> "Додатково · Advanced". The car page picks defaults by car: MCU1 → mjpeg 320 q25; Intel/Ryzen → gpu 540 q50.
+> No Developer options needed for normal streaming; touch needs Accessibility (+ "Allow restricted settings").
+
 # Daily use · Щоденне користування (TeslaDroid 0.3.x)
 
 ## A. Every trip · Кожна поїздка

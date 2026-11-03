@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.5.7</div>
+  <div id="ver">v0.5.8</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -200,6 +200,7 @@
     if (v === 'draw') { cw = dispW; ch = dispH; } else { cw = fw; ch = fh; }
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
     var left = Math.floor((aw - dispW) / 2), top = Math.floor((ah - dispH) / 2);
+    if (top < 0) { top = 0; }      // 1:1 taller than the area: show the top of the phone screen, not the middle
     canvas.style.left = left + 'px'; canvas.style.top = top + 'px';
     if (v === 'gpu') {
       canvas.style.width = fw + 'px'; canvas.style.height = fh + 'px';
@@ -236,7 +237,10 @@
     try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { schedule(); return; }
     ws.binaryType = 'arraybuffer';
     ws.onopen = function () {
-      queue = []; decoding = false; msg.style.display = 'none'; sendCfg();
+      queue = []; decoding = false; ready = []; playing = false;
+      if (presentTimer) { clearTimeout(presentTimer); presentTimer = null; }
+      connGen++;
+      msg.style.display = 'none'; sendCfg();
       if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
       everOpen = true;
     };
@@ -250,7 +254,7 @@
   // GC: MCU1's JavaScript heap is small and its collector stops the page. Per frame we now allocate only
   // the queue record and the Blob; Image decoders are reused from a pool, the JPEG is a view into the
   // received buffer (no copy), and the buffer is released as soon as the Blob holds it.
-  var queue = [], decoding = false, ready = [], pool = [];
+  var queue = [], decoding = false, ready = [], pool = [], connGen = 0;
   function decoder() { return pool.length ? pool.pop() : new Image(); }
   function release(img) { img.onload = img.onerror = null; if (pool.length < 4) { pool.push(img); } }
   var lastArrive = 0, interval = 66, gaps = [], autoTarget = 0;
@@ -318,8 +322,9 @@
     var url = URLx.createObjectURL(new Blob([new Uint8Array(f.buf, 20)], { type: 'image/jpeg' }));
     f.buf = null;
     if (set.v === 'img') { showImg(f, url); return; }
-    var img = decoder();
+    var img = decoder(), gen = connGen;
     img.onload = function () {
+      if (gen !== connGen) { URLx.revokeObjectURL(url); release(img); return; }   // from before a reconnect
       f.t1 = now(); f.dec = Math.round(f.t1 - f.t0);
       decoding = false;
       if (buffering) {
@@ -484,7 +489,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.5.7 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.5.8 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -503,7 +508,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.5.7', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.5.8', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

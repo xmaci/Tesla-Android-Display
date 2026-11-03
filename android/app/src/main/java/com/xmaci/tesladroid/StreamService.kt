@@ -329,9 +329,12 @@ class StreamService : Service(), CarServer.Listener {
             var captured = 0L
             synchronized(lock) {
                 val now = SystemClock.uptimeMillis()
-                // Forget frames whose ack never came (2 s), so the window cannot jam.
+                // Forget frames whose ack never came, so the window cannot jam. The car acks every frame it
+                // receives (shown, skipped or failed), so this is only a safety net: it was 2 s, and MCU1
+                // often needs longer in canvas views — the phone then sent more and the car's queue grew to
+                // seconds (profile: queue p95 2.8 s).
                 val it = inFlight.entries.iterator()
-                while (it.hasNext()) if (now - it.next().value > 2000) it.remove()
+                while (it.hasNext()) if (now - it.next().value > 10000) it.remove()
                 val c = conn
                 if (mjpegMode || c == null || !c.open || inFlight.size >= window || captureSeq == sentCaptureSeq || frame == null) {
                     lock.wait(50)
@@ -452,6 +455,7 @@ class StreamService : Service(), CarServer.Listener {
         val gen = ++mjpegGen
         val startedAt = SystemClock.uptimeMillis()
         mjOpen.incrementAndGet()
+        lastLoadAt = startedAt                          // fresh stream: give the car time to report
         try {
             sock.tcpNoDelay = true
             sock.sendBufferSize = 32 * 1024
@@ -571,7 +575,7 @@ class StreamService : Service(), CarServer.Listener {
                 synchronized(lock) { sentCaptureSeq = 0; lock.notifyAll() }
             }
             "full" -> synchronized(lock) { forceFull = true; sentCaptureSeq = 0; lock.notifyAll() }
-            "prof" -> saveProfile(text.substring(5))
+            "prof" -> { val json = text.substring(5); Thread({ saveProfile(json) }, "profile-save").start() }
             "load" -> p.getOrNull(1)?.toIntOrNull()?.let { onCarLoad(it) }
             "t" -> touch(conn, p)
             "k" -> TouchService.instance?.key(p.getOrNull(1) ?: "")

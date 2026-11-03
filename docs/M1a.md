@@ -216,6 +216,15 @@ the car decodes ~15 invisible frames/s on top of the canvas view. Fix: the phone
 the car's settings say "not mjpeg"; the page swaps the stream for a 1×1 inline GIF. Stats/profile show
 "⚠ mjpeg still open" if a stream is still being sent in a canvas view.
 
+## 0.5.8 — code review fixes
+
+1. Phone forgot un-acked frames after 2 s and sent more: on a slow MCU1 canvas view the car's queue grew to
+   seconds (queue p95 2.8 s). Safety net raised to 10 s; the car acks every frame anyway.
+2. Auto pacing treated a freshly opened MJPEG stream as a frozen car (no load report yet) and slowed it.
+3. Saving a profile ran file I/O on the WebSocket reader thread (touch and acks waited). Now a thread.
+4. 1:1 taller than the browser area was centred, cutting off the phone's status bar and bottom. Now top-aligned.
+5. After a reconnect, a decode started on the old connection could still draw and ack a stale frame. Ignored now.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

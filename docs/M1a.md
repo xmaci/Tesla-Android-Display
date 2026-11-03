@@ -139,6 +139,21 @@ Research (TMC forums, Tesla Android release notes, other mirroring projects):
 Changes: ⚙ Scaling **Fast** (default, nearest neighbour) / Smooth; ⚙ **Max fps** 10/15/20/30/∞
 (default 20) — the phone spaces MJPEG parts so the browser can paint each one. cfg gained field 7.
 
+## 0.5.0 — profiler, less garbage, frame buffer (MCU1 focus)
+
+- **⏱ profiler** (bar button, or `?prof=1`): records 5 s, then shows a table on the car screen and saves
+  `TeslaDroid-prof-<time>.json` to the phone's Downloads (summary also in the app). Canvas views: per update
+  queue / decode / hold / draw / paint ms, arrival gap and **shown gap** (spacing on screen), bytes, changed
+  area; `js lag` = how late a 16 ms timer fires (GC, layout). MJPEG views: the shown picture is sampled every
+  40 ms to count frames that really changed on screen (sampling cost is reported). Ends with one verdict.
+- **GC:** Image decoders reused from a pool, JPEG passed as a view of the received buffer (no copy), buffer
+  released once the Blob holds it, touch dots reused, watchdog hashes the picture to a number instead of a
+  3 KB string every 1.3 s.
+- **Frame buffer** (⚙ Off / 1 / 2 / Auto, canvas views only, default Off): a jitter buffer that fills to the
+  target, then shows one update per measured interval, pace bent ±15–20 % to hold the fill level. Frames are
+  acked on decode so the phone keeps sending. A touch empties it for 1.5 s. Mock test with uneven 60–160 ms
+  arrivals: shown-gap p95 86 → 55 ms, max 112 → 64 ms, at +80 ms delay.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

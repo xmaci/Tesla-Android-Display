@@ -33,7 +33,7 @@ class CarServer(
 
     companion object {
         private const val GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        private const val MAX_FRAME = 64 * 1024
+        private const val MAX_FRAME = 128 * 1024
     }
 
     /** First port that bound (used for the car link); all bound ports listen. */

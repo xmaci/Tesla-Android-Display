@@ -33,6 +33,7 @@
   /* Nearest-neighbour scaling: much cheaper for MCU1's software painter than smooth (bilinear) scaling.
      Old WebKit drops the values it does not know, so the last one it understands wins. */
   .fast #mj, .fast .shot, .fast #screen { image-rendering: optimizeSpeed; image-rendering: -webkit-optimize-contrast; image-rendering: pixelated; }
+  #prof { position: absolute; top: 72px; left: 8px; right: 8px; background: #101820; border: 1px solid #2a6fdb; border-radius: 10px; padding: 12px 14px; display: none; font-size: 17px; line-height: 24px; color: #dde; white-space: pre-wrap; font-family: monospace; }
   #msg { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 26px; color: #888; }
   .dot { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 18px; background: rgba(42,111,219,0.6); pointer-events: none; }
   #panel { position: absolute; top: 72px; left: 8px; right: 8px; background: #1b1b1b; border: 1px solid #333; border-radius: 10px; padding: 12px 14px; display: none; }
@@ -51,10 +52,12 @@
   <button id="kNotif">☰</button>
   <button id="bSet">⚙</button>
   <button id="bRe">↻</button>
+  <button id="bProf">⏱</button>
   <div id="stats">…</div>
-  <div id="ver">v0.4.6</div>
+  <div id="ver">v0.5.0</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
+<div id="prof"></div>
 <div id="msg">Підключення… · Connecting…</div>
 <div id="panel">
   <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div></div>
@@ -63,6 +66,8 @@
   <div class="row"><div class="lbl">Авто-роздільність у русі · Auto resolution in motion</div><div id="optA"></div></div>
   <div class="row"><div class="lbl">Масштабування · Scaling</div><div id="optS"></div></div>
   <div class="row"><div class="lbl">Макс. кадрів/с (mjpeg) · Max fps (mjpeg)</div><div id="optF"></div></div>
+  <div class="row"><div class="lbl">Буфер кадрів (плавність, + затримка) · Frame buffer (smoother, adds delay)</div><div id="optB"></div>
+    <div class="hint">лише gpu / draw / fit / 1:1 · дотик скидає буфер · only canvas views · a touch empties it</div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
     <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
   <button id="bClose">✕ Закрити · Close</button>
@@ -101,7 +106,8 @@
     a: ['1', '0'],
     v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img'],
     s: ['fast', 'smooth'],
-    f: ['10', '15', '20', '30', '0']
+    f: ['10', '15', '20', '30', '0'],
+    b: ['0', '1', '2', 'a']
   };
   var set = {
     w: param('w') || load('w', '432'),
@@ -110,7 +116,8 @@
     a: param('auto') || load('a2', '0'),       // Auto resolution: off by default (resizing caused stutter)
     v: param('mode') || load('v', 'mjpeg'),
     s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
-    f: param('fps') || load('f', '20')          // MJPEG frame cap; 0 = none
+    f: param('fps') || load('f', '20'),         // MJPEG frame cap; 0 = none
+    b: param('buf') || load('b', '0')           // frame buffer in canvas views: 0 off, 1, 2, a = auto
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -161,6 +168,7 @@
     set[key] = val; store(key === 'a' ? 'a2' : key, val); markOptions();
     if (key === 'v') { layout(); }
     if (key === 's') { applyScaling(); return; }
+    if (key === 'b') { tick(); return; }
     sendCfg();
   }
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
@@ -170,6 +178,7 @@
   buildOptions('v', 'optV', function (v) { return v; });
   buildOptions('s', 'optS', function (v) { return v === 'fast' ? 'Швидко · Fast' : 'Гладко · Smooth'; });
   buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v; });
+  buildOptions('b', 'optB', function (v) { return v === '0' ? 'Off' : v === 'a' ? 'Auto' : v; });
   markOptions(); applyScaling();
   var panelOpen = false;
   function showPanel(open) { panelOpen = open; panel.style.display = open ? 'block' : 'none'; }
@@ -226,7 +235,7 @@
     try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { schedule(); return; }
     ws.binaryType = 'arraybuffer';
     ws.onopen = function () {
-      queue = []; busy = false; msg.style.display = 'none'; sendCfg();
+      queue = []; decoding = false; msg.style.display = 'none'; sendCfg();
       if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
       everOpen = true;
     };
@@ -237,7 +246,14 @@
   function schedule() { if (!retry) { retry = setTimeout(connect, 1500); } }
 
   // ---- frames ----
-  var queue = [], busy = false;
+  // GC: MCU1's JavaScript heap is small and its collector stops the page. Per frame we now allocate only
+  // the queue record and the Blob; Image decoders are reused from a pool, the JPEG is a view into the
+  // received buffer (no copy), and the buffer is released as soon as the Blob holds it.
+  var queue = [], decoding = false, ready = [], pool = [];
+  function decoder() { return pool.length ? pool.pop() : new Image(); }
+  function release(img) { img.onload = img.onerror = null; if (pool.length < 4) { pool.push(img); } }
+  var lastArrive = 0, interval = 66, gaps = [], autoTarget = 0;
+
   function onMessage(ev) {
     if (typeof ev.data === 'string') {
       var d = ev.data;
@@ -250,49 +266,133 @@
       else if (d.indexOf('ti:') === 0) {
         var r = d.substr(3);
         if (r === '1') { touchOk++; } else if (r === 'x') { touchNoSvc++; } else { touchFail++; }
+        if (prof && prof.touchT.length) { prof.touchAck.push(Math.round(now() - prof.touchT.shift())); }
         showStats();
       }
       return;
     }
-    var dv = new DataView(ev.data);
-    queue.push({
-      buf: ev.data, t: now(), seq: dv.getUint32(0), fw: dv.getUint16(4), fh: dv.getUint16(6),
+    var dv = new DataView(ev.data), t = now();
+    var f = {
+      buf: ev.data, t: t, seq: dv.getUint32(0), fw: dv.getUint16(4), fh: dv.getUint16(6),
       more: (dv.getUint16(10) & 0x8000) !== 0,      // more rectangles of the same screen update follow
-      x: dv.getUint16(12), y: dv.getUint16(14), rw: dv.getUint16(16), rh: dv.getUint16(18)
-    });
+      x: dv.getUint16(12), y: dv.getUint16(14), rw: dv.getUint16(16), rh: dv.getUint16(18),
+      bytes: ev.data.byteLength, t0: 0, t1: 0, wait: 0, dec: 0
+    };
+    if (!f.more) { noteArrival(t); }
+    queue.push(f);
     pump();
   }
+  // Arrival rhythm of complete updates: the buffer shows frames at this steady interval.
+  function noteArrival(t) {
+    if (lastArrive) {
+      var g = Math.min(500, t - lastArrive);
+      interval = Math.max(16, Math.min(250, interval * 0.9 + g * 0.1));
+      gaps.push(g); if (gaps.length > 30) { gaps.shift(); }
+      if (gaps.length >= 10) {
+        var sg = gaps.slice().sort(function (a, b) { return a - b; });
+        var jitter = sg[Math.floor(sg.length * 0.9)] - sg[Math.floor(sg.length / 2)];
+        autoTarget = jitter > interval * 1.2 ? 2 : jitter > interval * 0.5 ? 1 : 0;
+      }
+    }
+    lastArrive = t;
+  }
+  function bufOn() { return set.b !== '0' && !isMj() && set.v !== 'img'; }
+  function bufTarget() {
+    if (!bufOn() || now() - lastTouchT < 1500) { return 0; }   // touching: show everything at once
+    return set.b === 'a' ? autoTarget : +set.b;
+  }
   function isFull(f) { return f.x === 0 && f.y === 0 && f.rw === f.fw && f.rh === f.fh; }
+
   function pump() {
-    if (busy || !queue.length) { return; }
+    if (decoding || !queue.length) { return; }
+    var buffering = bufOn();
+    if (buffering && ready.length > bufTarget() + 1) { return; }   // buffer full: no ack, so the phone waits
     // Partial frames build on each other: only frames older than a queued full frame can be dropped.
     var lastFull = -1;
     for (var i = queue.length - 1; i > 0; i--) { if (isFull(queue[i])) { lastFull = i; break; } }
     while (lastFull > 0) { ack(queue.shift().seq, 0, 0, 0, 0); lastFull--; }
     var f = queue.shift();
-    busy = true;
-    var t0 = now(), wait = Math.round(t0 - f.t);
-    var url = URLx.createObjectURL(new Blob([f.buf.slice(20)], { type: 'image/jpeg' }));
-    if (set.v === 'img') { showImg(f, url, t0, wait); return; }
-    var img = new Image();
+    decoding = true;
+    f.t0 = now(); f.wait = Math.round(f.t0 - f.t);
+    var url = URLx.createObjectURL(new Blob([new Uint8Array(f.buf, 20)], { type: 'image/jpeg' }));
+    f.buf = null;
+    if (set.v === 'img') { showImg(f, url); return; }
+    var img = decoder();
     img.onload = function () {
-      var t1 = now();
-      if (frameW !== f.fw || frameH !== f.fh) { frameW = f.fw; frameH = f.fh; layout(); }
-      if (set.v === 'draw') {
-        var sx = canvas.width / f.fw, sy = canvas.height / f.fh;
-        var dx = Math.floor(f.x * sx), dy = Math.floor(f.y * sy);
-        ctx.drawImage(img, dx, dy, Math.ceil((f.x + f.rw) * sx) - dx, Math.ceil((f.y + f.rh) * sy) - dy);
+      f.t1 = now(); f.dec = Math.round(f.t1 - f.t0);
+      decoding = false;
+      if (buffering) {
+        ack(f.seq, f.dec, 0, f.wait, 1);          // decoded: the phone may send the next one
+        ready.push({ f: f, img: img, url: url });
+        tick(); pump();
       } else {
-        ctx.drawImage(img, f.x, f.y);
+        present({ f: f, img: img, url: url }, 0);
+        pump();
       }
-      var t2 = now();
-      URLx.revokeObjectURL(url);
-      done(f, Math.round(t1 - t0), Math.round(t2 - t1), wait);
     };
-    img.onerror = function () { URLx.revokeObjectURL(url); ack(f.seq, 0, 0, 0, 0); askFull(); busy = false; pump(); };
+    img.onerror = function () {
+      URLx.revokeObjectURL(url); release(img); ack(f.seq, 0, 0, 0, 0); askFull(); decoding = false; pump();
+    };
     img.src = url;
   }
-  function showImg(f, url, t0, wait) {
+
+  // Draw one decoded rectangle. `hold` = how long it waited in the frame buffer.
+  function present(it, hold) {
+    var f = it.f, img = it.img;
+    if (frameW !== f.fw || frameH !== f.fh) { frameW = f.fw; frameH = f.fh; layout(); }
+    var t1 = now();
+    if (set.v === 'draw') {
+      var sx = canvas.width / f.fw, sy = canvas.height / f.fh;
+      var dx = Math.floor(f.x * sx), dy = Math.floor(f.y * sy);
+      ctx.drawImage(img, dx, dy, Math.ceil((f.x + f.rw) * sx) - dx, Math.ceil((f.y + f.rh) * sy) - dy);
+    } else {
+      ctx.drawImage(img, f.x, f.y);
+    }
+    var t2 = now(), draw = Math.round(t2 - t1);
+    URLx.revokeObjectURL(it.url); release(img);
+    lastDecode = f.dec; lastDraw = draw;
+    if (!bufOn()) { ack(f.seq, f.dec, draw, f.wait, 1); }
+    if (!f.more) { frames++; }
+    if (prof) { profFrame(f, Math.round(hold), draw, t2); }
+  }
+
+  // Frame buffer (jitter buffer): first fill up to `target` complete updates, then show one update per
+  // `interval` (the measured average arrival rhythm). The pace bends slightly to keep the fill level near
+  // the target: faster when it overfills, slower when it runs low. Arrival hiccups shorter than
+  // target × interval are hidden; the cost is that much extra delay.
+  var presentTimer = null, lastPresent = 0, playing = false, emptySince = 0;
+  function tick() {
+    if (presentTimer) { clearTimeout(presentTimer); presentTimer = null; }
+    var n = now(), tgt = bufTarget();
+    if (!ready.length) {
+      if (playing && !emptySince) { emptySince = n; }
+      if (playing && n - emptySince > 3 * interval) { playing = false; }    // long drought: refill first
+      return;
+    }
+    emptySince = 0;
+    if (tgt === 0) { while (ready.length) { presentNext(n); } pump(); return; }
+    var updates = 0;
+    for (var i = 0; i < ready.length; i++) { if (!ready[i].f.more) { updates++; } }
+    if (!playing && (updates >= tgt || n - ready[0].f.t1 > (tgt + 1) * interval)) { playing = true; }
+    var pace = interval * (updates > tgt + 1 ? 0.8 : updates < tgt ? 1.15 : 1);
+    if (playing && n - lastPresent >= pace - 2) { presentNext(n); }
+    if (ready.length) {
+      var wake = playing ? lastPresent + pace - now() : (tgt + 1) * interval - (now() - ready[0].f.t1);
+      presentTimer = setTimeout(tick, Math.max(4, wake));
+    }
+    pump();
+  }
+  // Show one complete update: its rectangles up to and including the one without the "more" bit.
+  function presentNext(n) {
+    while (ready.length) {
+      var it = ready.shift();
+      present(it, n - it.f.t1);
+      if (!it.f.more) { break; }
+    }
+    lastPresent = n;
+  }
+
+  function showImg(f, url) {
     var back = 1 - front, el = shots[back];
     el.onload = function () {
       var t1 = now();
@@ -300,20 +400,123 @@
       el.style.display = 'block'; shots[front].style.display = 'none';
       if (shotUrls[front]) { URLx.revokeObjectURL(shotUrls[front]); }
       shotUrls[back] = url; front = back;
-      done(f, Math.round(t1 - t0), Math.round(now() - t1), wait);
+      f.t1 = t1; f.dec = Math.round(t1 - f.t0);
+      var draw = Math.round(now() - t1);
+      ack(f.seq, f.dec, draw, f.wait, 1);
+      if (!f.more) { frames++; }
+      if (prof) { profFrame(f, 0, draw, now()); }
+      decoding = false; pump();
     };
-    el.onerror = function () { URLx.revokeObjectURL(url); ack(f.seq, 0, 0, 0, 0); busy = false; pump(); };
+    el.onerror = function () { URLx.revokeObjectURL(url); ack(f.seq, 0, 0, 0, 0); decoding = false; pump(); };
     el.src = url;
-  }
-  function done(f, dec, draw, wait) {
-    lastDecode = dec; lastDraw = draw;
-    ack(f.seq, dec, draw, wait, 1);
-    if (!f.more) { frames++; }
-    busy = false; pump();
   }
   function ack(seq, dec, draw, wait, shown) {
     if (ws && ws.readyState === 1) { ws.send('ack:' + seq + ':' + dec + ':' + draw + ':' + wait + ':' + shown); }
   }
+
+  // ---- 5 s profiler (⏱ or ?prof=1) ----
+  // No DevTools in the Tesla browser, so the page times itself. Per update: bytes, changed area, queue
+  // wait, decode, buffer hold, drawImage, paint (until the next animation frame) and the arrival gap.
+  // jsLag = how late a 16 ms timer fires (main thread busy: GC, layout, decode). MJPEG views: the shown
+  // picture is sampled every 40 ms to count frames that really changed on screen.
+  var prof = null, profEl = document.getElementById('prof'), profBtn = document.getElementById('bProf');
+  var raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame || function (fn) { return setTimeout(fn, 0); };
+  function profStart() {
+    if (prof) { return; }
+    profEl.style.display = 'none';
+    prof = { t0: now(), frames: [], lag: [], touchT: [], touchAck: [], mjSamples: 0, mjChanges: 0, mjCost: 0, mjLast: -1,
+             srv0: JSON.stringify(server), prevArrive: 0, prevShown: 0 };
+    profBtn.innerHTML = '⏱ 5';
+    lagLoop(); if (isMj()) { mjSample(); }
+    setTimeout(profEnd, 5000);
+  }
+  function lagLoop() {
+    var expect = now() + 16;
+    setTimeout(function () { if (!prof) { return; } prof.lag.push(Math.round(now() - expect)); lagLoop(); }, 16);
+  }
+  function profFrame(f, hold, draw, t2) {
+    var rec = [f.seq, f.bytes, Math.round(f.rw * f.rh * 1000 / (f.fw * f.fh)) / 10, f.wait, f.dec, hold, draw, -1,
+               prof.prevArrive ? Math.round(f.t - prof.prevArrive) : 0, f.more ? 1 : 0, -1];
+    prof.prevArrive = f.t;
+    // shown gap: time between complete updates on screen — what the frame buffer evens out
+    if (!f.more) { if (prof.prevShown) { rec[10] = Math.round(t2 - prof.prevShown); } prof.prevShown = t2; }
+    prof.frames.push(rec);
+    if (prof.frames.length <= 400) { raf(function () { rec[7] = Math.round(now() - t2); }); }
+  }
+  function mjSample() {
+    if (!prof || !isMj()) { return; }
+    var a = now(), h = 0;
+    try {
+      pctx.drawImage(mj, 0, 0, 16, 16);
+      var d = pctx.getImageData(0, 0, 16, 16).data;
+      for (var i = 0; i < d.length; i += 4) { h = (h * 31 + d[i] * 7 + d[i + 1] * 3 + d[i + 2]) | 0; }
+    } catch (e) { h = -2; }
+    prof.mjCost += now() - a; prof.mjSamples++;
+    if (h !== prof.mjLast) { prof.mjChanges++; prof.mjLast = h; }
+    setTimeout(mjSample, 40);
+  }
+  function stat(list) {
+    if (!list.length) { return { med: 0, p95: 0, avg: 0, max: 0 }; }
+    var a = list.slice().sort(function (x, y) { return x - y; }), sum = 0;
+    for (var i = 0; i < a.length; i++) { sum += a[i]; }
+    return { med: a[Math.floor(a.length / 2)], p95: a[Math.min(a.length - 1, Math.floor(a.length * 0.95))],
+             avg: Math.round(sum / a.length), max: a[a.length - 1] };
+  }
+  function col(k) { var out = []; for (var i = 0; i < prof.frames.length; i++) { if (prof.frames[i][k] >= 0) { out.push(prof.frames[i][k]); } } return out; }
+  function profEnd() {
+    var p = prof; if (!p) { return; }
+    var secs = (now() - p.t0) / 1000, mj = isMj();
+    var updates = 0; for (var i = 0; i < p.frames.length; i++) { if (!p.frames[i][9]) { updates++; } }
+    var S = { queue: stat(col(3)), decode: stat(col(4)), hold: stat(col(5)), draw: stat(col(6)), paint: stat(col(7)),
+              gap: stat(col(8)), shown: stat(col(10)), kb: stat(col(1)), area: stat(col(2)), lag: stat(p.lag), touch: stat(p.touchAck) };
+    var fps = mj ? Math.round(p.mjChanges / secs * 10) / 10 : Math.round(updates / secs * 10) / 10;
+    var stalls = 0; for (var j = 0; j < p.lag.length; j++) { if (p.lag[j] > 100) { stalls++; } }
+    var verdict;
+    if (mj) {
+      verdict = fps < (server.fps || 0) * 0.6 ? 'Car shows fewer frames than the phone sends: lower width/quality or Max fps' :
+        'Car keeps up with the phone; the phone side (capture/encode) sets the fps';
+    } else {
+      var parts = { 'JPEG decode': S.decode.avg, 'drawImage (scaling)': S.draw.avg, 'screen paint': S.paint.avg, 'waiting in queue': S.queue.avg };
+      var worst = 'JPEG decode';
+      for (var k in parts) { if (parts.hasOwnProperty(k) && parts[k] > parts[worst]) { worst = k; } }
+      var tips = { 'JPEG decode': 'lower width or quality', 'drawImage (scaling)': 'use 1:1 or Fast scaling',
+                   'screen paint': 'smaller picture on screen', 'waiting in queue': 'lower ×N (frames in flight)' };
+      verdict = 'Biggest cost: ' + worst + ' ' + parts[worst] + ' ms/frame → ' + tips[worst];
+    }
+    if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
+    var lines = [
+      'PROFILE 5 s · v0.5.0 · ' + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+        (bufOn() ? ' · buf ' + set.b : ''),
+      'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
+        ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
+      mj ? 'sampling cost ' + Math.round(p.mjCost / Math.max(1, p.mjSamples)) + ' ms/sample (' + p.mjSamples + ' samples)' :
+        'ms          med  p95  avg  max',
+    ];
+    if (!mj) {
+      var row = function (name, s2) { var pad = '          '; return (name + pad).substr(0, 11) + (pad + s2.med).slice(-4) + (pad + s2.p95).slice(-5) + (pad + s2.avg).slice(-5) + (pad + s2.max).slice(-5); };
+      lines.push(row('queue', S.queue), row('decode', S.decode), row('hold', S.hold), row('draw', S.draw), row('paint', S.paint), row('arrive gap', S.gap), row('shown gap', S.shown));
+      lines.push('size ' + Math.round(S.kb.avg / 102.4) / 10 + ' KB avg · changed area ' + S.area.avg + ' % avg · ' + p.frames.length + ' rects');
+    }
+    lines.push('js lag p95 ' + S.lag.p95 + ' ms · max ' + S.lag.max + ' ms · touch→ack ' + (p.touchAck.length ? S.touch.med + ' ms' : '—'));
+    lines.push('', verdict, '', '(дотик закриває · tap to close)');
+    profEl.innerHTML = '';
+    profEl.appendChild(document.createTextNode(lines.join('\n')));
+    profEl.style.display = 'block';
+    profBtn.innerHTML = '⏱';
+    var payload = { v: '0.5.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+                    q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: +set.f, secs: Math.round(secs * 10) / 10,
+                    fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
+                    mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,
+                    cols: ['seq', 'bytes', 'area%', 'queue', 'decode', 'hold', 'draw', 'paint', 'gap', 'more', 'shownGap'],
+                    frames: p.frames.slice(0, 400), lag: p.lag.slice(0, 400) };
+    var json = JSON.stringify(payload);
+    if (json.length > 60000) { payload.frames = payload.frames.slice(0, 150); payload.lag = payload.lag.slice(0, 150); json = JSON.stringify(payload); }
+    if (ws && ws.readyState === 1) { ws.send('prof:' + json); }
+    prof = null;
+  }
+  onTap(profBtn, profStart, 1500);
+  profEl.addEventListener('touchend', function (e) { e.preventDefault(); profEl.style.display = 'none'; }, false);
+  profEl.addEventListener('click', function () { profEl.style.display = 'none'; }, false);
 
   function showStats() {
     var t = now();
@@ -341,11 +544,14 @@
   function sendTouch(kind, p) {
     if (p && ws && ws.readyState === 1) { ws.send('t:' + kind + ':' + p.x.toFixed(4) + ':' + p.y.toFixed(4)); }
   }
+  var dots = [], dotN = 0;
   function dot(p) {
-    var d = document.createElement('div'); d.className = 'dot';
-    d.style.left = p.cx + 'px'; d.style.top = p.cy + 'px';
-    document.body.appendChild(d);
-    setTimeout(function () { if (d.parentNode) { d.parentNode.removeChild(d); } }, 350);
+    var d = dots[dotN % 3];
+    if (!d) { d = dots[dotN % 3] = document.createElement('div'); d.className = 'dot'; d.style.display = 'none'; document.body.appendChild(d); }
+    dotN++;
+    d.style.left = p.cx + 'px'; d.style.top = p.cy + 'px'; d.style.display = 'block';
+    if (d.hideT) { clearTimeout(d.hideT); }
+    d.hideT = setTimeout(function () { d.style.display = 'none'; d.hideT = null; }, 350);
   }
   wrap.addEventListener('touchstart', function (e) {
     lastTouchT = now(); e.preventDefault();
@@ -353,6 +559,7 @@
     var t = e.changedTouches[0], p = pos(t.clientX, t.clientY);
     if (!p || !p.inside) { return; }
     touching = true; sendTouch('d', p); dot(p);
+    if (ready.length) { tick(); }
   }, false);
   wrap.addEventListener('touchmove', function (e) {
     lastTouchT = now(); e.preventDefault();
@@ -364,6 +571,7 @@
     lastTouchT = now(); e.preventDefault();
     if (!touching) { return; }
     touching = false; touchSent++;
+    if (prof) { prof.touchT.push(now()); }
     var t = e.changedTouches[0];
     sendTouch('u', pos(t.clientX, t.clientY));
     showStats();
@@ -398,15 +606,16 @@
   // The phone reports how much of the screen really changed ("upd"). If it says the screen moves but the
   // picture shown here has not changed for ~4 s, the browser's stream is stuck: reopen it.
   var probe = document.createElement('canvas'); probe.width = 16; probe.height = 16;
-  var pctx = probe.getContext('2d'), lastSig = '', sameFor = 0, picState = '…', mjRestarts = 0, probeOk = true;
+  var pctx = probe.getContext('2d'), lastSig = -1, sameFor = 0, picState = '…', mjRestarts = 0, probeOk = true;
   function restartMj() { if (isMj()) { mjOn = false; layout(); } }
   function checkMj() {
     if (!isMj() || !probeOk || !mj.complete && !mj.naturalWidth) { return; }
-    var sig = '';
+    if (prof) { return; }                      // the profiler samples the picture itself
+    var sig = 0;
     try {
       pctx.drawImage(mj, 0, 0, 16, 16);
       var d = pctx.getImageData(0, 0, 16, 16).data;
-      for (var i = 0; i < d.length; i += 4) { sig += d[i] + ',' + d[i + 1] + ',' + d[i + 2] + ';'; }
+      for (var i = 0; i < d.length; i += 4) { sig = (sig * 31 + d[i] * 7 + d[i + 1] * 3 + d[i + 2]) | 0; }
     } catch (e) { probeOk = false; picState = 'n/a'; return; }
     if (sig === lastSig) {
       sameFor++;
@@ -422,6 +631,7 @@
 
   setInterval(showStats, 1000);
   connect();
+  if (param('prof')) { setTimeout(profStart, 4000); }
 })();
 </script>
 </body>

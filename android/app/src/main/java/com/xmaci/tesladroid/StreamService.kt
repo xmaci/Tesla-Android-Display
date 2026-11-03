@@ -70,6 +70,9 @@ class StreamService : Service(), CarServer.Listener {
             private set
         @Volatile var instanceServer: CarServer? = null
             private set
+        /** Last 5 s profile from the car: one-line summary + where the JSON was saved. */
+        @Volatile var lastProfile = ""
+            private set
 
         fun start(ctx: Context, code: Int, data: Intent) {
             ctx.startForegroundService(Intent(ctx, StreamService::class.java)
@@ -553,9 +556,32 @@ class StreamService : Service(), CarServer.Listener {
                 synchronized(lock) { sentCaptureSeq = 0; lock.notifyAll() }
             }
             "full" -> synchronized(lock) { forceFull = true; sentCaptureSeq = 0; lock.notifyAll() }
+            "prof" -> saveProfile(text.substring(5))
             "t" -> touch(conn, p)
             "k" -> TouchService.instance?.key(p.getOrNull(1) ?: "")
         }
+    }
+
+    /** Saves a car profile JSON to Downloads (TeslaDroid-prof-<time>.json) and keeps a summary for the app. */
+    private fun saveProfile(json: String) {
+        val name = "TeslaDroid-prof-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".json"
+        val summary = try {
+            val o = org.json.JSONObject(json)
+            "${o.optString("view")} ${o.optInt("w")}×${o.optInt("h")} · ${o.optDouble("fps")} fps · ${o.optString("verdict").replace('\n', ' ')}"
+        } catch (e: Exception) { "unreadable profile (${json.length} chars)" }
+        val where = try {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/json")
+            }
+            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            uri?.let { u -> contentResolver.openOutputStream(u)?.use { it.write(json.toByteArray(Charsets.UTF_8)) } }
+            "Downloads/$name"
+        } catch (e: Exception) {
+            java.io.File(filesDir, name).writeText(json); "app files/$name"
+        }
+        lastProfile = "$summary\n→ $where"
+        Log.i(TAG, "profile saved: $where")
     }
 
     private fun touch(conn: CarServer.Conn, p: List<String>) {

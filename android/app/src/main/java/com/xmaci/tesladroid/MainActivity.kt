@@ -63,7 +63,7 @@ class MainActivity : Activity() {
             Button(this).apply { text = s; isAllCaps = false; setOnClickListener { onClick() } }
                 .also { col.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
-        text("TeslaDroid · M1 · 0.4.6", 26f, true)
+        text("TeslaDroid · M1 · 0.5.0", 26f, true)
         text("Екран телефона на Tesla · Phone screen on the Tesla", 14f, color = Color.GRAY)
 
         text("1. Дотик з екрана авто · Touch from the car screen", 17f, true)
@@ -215,6 +215,7 @@ class MainActivity : Activity() {
         lines += "Трансляція · Stream: " + if (StreamService.running) "✅ port ${StreamService.serverPort}" else "❌ ${StreamService.status}"
         lines += "Дотик · Touch: " + if (TouchService.instance != null) "✅" else "❌ (крок 1 · step 1)"
         lines += "Tesla: " + if (StreamService.carConnected) "✅ ${StreamService.statsLine}" else "очікування · waiting"
+        if (StreamService.lastProfile.isNotEmpty()) lines += "⏱ " + StreamService.lastProfile
         status.text = lines.joinToString("\n")
         Thread { helperLine = Helper.ping(this) }.start()
         helperStatus.text = (if (helperLine != null) "✅ $helperLine" else "❌ не запущено · not running") +

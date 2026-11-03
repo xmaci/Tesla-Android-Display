@@ -154,6 +154,21 @@ Changes: ⚙ Scaling **Fast** (default, nearest neighbour) / Smooth; ⚙ **Max f
   acked on decode so the phone keeps sending. A touch empties it for 1.5 s. Mock test with uneven 60–160 ms
   arrivals: shown-gap p95 86 → 55 ms, max 112 → 64 ms, at +80 ms delay.
 
+## First MCU1 profiles (2026-11-03, 0.5.0, 432 px, browser in the lower half under the car's map)
+
+| View | shown fps | queue med | decode med | paint med / p95 | js lag p95 | stalls >100 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| mjpeg q25 | 3.9* | — | — | — | 336 ms | 19 |
+| gpu q35, buffer off | 2.1 | 127 | 135 | 71 / 227 | 277 ms | 19 |
+| gpu q35, buffer 2 | 2.4 | 173 | 148 | 72 / 225 | 181 ms | 12 |
+
+\* only 20 samples in 5 s: the sampler itself was starved, so 3.9 is a floor of what it could see.
+Reading: the page's main thread is blocked in 100–330 ms chunks. A 2.7 KB partial rect "decoding" for
+135 ms is not decode work: its onload waits behind those stalls. Paint 71–267 ms per update points at
+repainting the CSS-scaled 432×960 canvas. The frame buffer adds 265 ms and gains nothing at 2 fps → keep Off.
+0.5.1: the sampler copies a 96×96 crop (was: whole frame scaled, ~10 ms per sample) and reports how many
+fps it could possibly see.
+
 ## Known pitfalls (Pixel 7, 2026-11-02)
 
 - **Phone Wi‑Fi must be off while streaming.** With Wi‑Fi and hotspot on together, the car loads the

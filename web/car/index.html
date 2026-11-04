@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.7.1-B</div>
+  <div id="ver">v0.7.2-B</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -261,11 +261,92 @@
   layout();
 
   // ---- connection ----
+  // v0.7.2-B (design by the competing model): the WebSocket lives in a Web Worker. On MCU1 one thread runs
+  // JavaScript, image decode and paint; while it decodes, nobody drains the socket. The worker reads frames
+  // on its own thread, drops any update made obsolete by a newer full frame (acking it at once so the phone's
+  // ×2 window never sticks) and hands the main thread ONE complete update at a time, only after the main
+  // thread said "ready". The phone protocol is unchanged. Falls back to the plain socket if Worker or a
+  // WebSocket inside it is missing or does not open within 2 s. `?worker=0` forces the old path.
+  var WORKER_SRC = [
+    'var ws = null, list = [], busy = false;',
+    'function send(s) { if (ws && ws.readyState === 1) { ws.send(s); } }',
+    'function hdr(b) { var v = new DataView(b); return { seq: v.getUint32(0), fw: v.getUint16(4), fh: v.getUint16(6),',
+    '  more: (v.getUint16(10) & 0x8000) !== 0, x: v.getUint16(12), y: v.getUint16(14), w: v.getUint16(16), h: v.getUint16(18), buf: b }; }',
+    'function isFull(f) { return f.x === 0 && f.y === 0 && f.w === f.fw && f.h === f.fh; }',
+    'function pump() {',
+    '  if (busy || !list.length) { return; }',
+    '  var n = 0; while (n < list.length && list[n].more) { n++; }',
+    '  if (n >= list.length) { return; }',                        // the update is not complete yet
+    '  var items = list.splice(0, n + 1), bufs = [], i;',
+    '  for (i = 0; i < items.length; i++) { bufs.push(items[i].buf); }',
+    '  busy = true;',
+    '  try { postMessage({ t: "update", items: bufs }, bufs); } catch (e) { postMessage({ t: "update", items: bufs }); }',
+    '}',
+    'onmessage = function (e) {',
+    '  var d = e.data;',
+    '  if (d.t === "open") {',
+    '    try { ws = new WebSocket(d.url); } catch (x) { postMessage({ t: "close", why: String(x && x.message) }); return; }',
+    '    ws.binaryType = "arraybuffer";',
+    '    ws.onopen = function () { list = []; busy = false; postMessage({ t: "open" }); };',
+    '    ws.onclose = function () { postMessage({ t: "close" }); };',
+    '    ws.onmessage = function (ev) {',
+    '      if (typeof ev.data === "string") { postMessage({ t: "text", d: ev.data }); return; }',
+    '      var f = hdr(ev.data), i;',
+    '      if (isFull(f)) { for (i = 0; i < list.length; i++) { send("ack:" + list[i].seq + ":0:0:0:0"); } list = []; }',
+    '      list.push(f); pump();',
+    '    };',
+    '  } else if (d.t === "send") { send(d.s); }',
+    '  else if (d.t === "ready") { busy = false; pump(); }',
+    '  else if (d.t === "close") { if (ws) { ws.close(); } }',
+    '};'
+  ].join('\n');
+  var useWorker = !!window.Worker && param('worker') !== '0', workerOn = false, wk = null, wkPending = 0, wkReadyTimer = null;
+  function wkReady() {
+    if (wkReadyTimer) { clearTimeout(wkReadyTimer); wkReadyTimer = null; }
+    if (wk) { wk.postMessage({ t: 'ready' }); }
+  }
+  // Every rect the page receives is acked exactly once (shown, skipped or failed): count them down per update.
+  function wkAcked() { if (workerOn && wkPending > 0) { wkPending--; if (wkPending === 0) { wkReady(); } } }
+  function killWorker() { if (wk) { try { wk.terminate(); } catch (e) {} } wk = null; workerOn = false; wkPending = 0; }
+  function connectWorker() {
+    var src, opened = false, facade, timer;
+    try { src = URLx.createObjectURL(new Blob([WORKER_SRC], { type: 'application/javascript' })); wk = new Worker(src); }
+    catch (e) { wk = null; return false; }
+    facade = { readyState: 0, send: function (t) { if (wk) { wk.postMessage({ t: 'send', s: t }); } } };
+    ws = facade;
+    function giveUp() { clearTimeout(timer); killWorker(); useWorker = false; ws = null; connect(); }
+    timer = setTimeout(function () { if (!opened) { giveUp(); } }, 2000);
+    wk.onerror = function () { if (!opened) { giveUp(); } };
+    wk.onmessage = function (e) {
+      var d = e.data, i;
+      if (d.t === 'open') { opened = true; clearTimeout(timer); workerOn = true; facade.readyState = 1; wkPending = 0; onOpen(); }
+      else if (d.t === 'text') { onMessage({ data: d.d }); }
+      else if (d.t === 'update') {
+        wkPending = d.items.length;
+        // Safety net: if a decode never finishes, do not leave the worker waiting forever.
+        if (wkReadyTimer) { clearTimeout(wkReadyTimer); }
+        wkReadyTimer = setTimeout(function () { wkPending = 0; wkReady(); }, 3000);
+        for (i = 0; i < d.items.length; i++) { onMessage({ data: d.items[i] }); }
+      }
+      else if (d.t === 'close') {
+        if (!opened) { giveUp(); return; }
+        facade.readyState = 3; killWorker(); onClose();
+      }
+    };
+    wk.postMessage({ t: 'open', url: 'ws://' + location.host + '/ws' });
+    return true;
+  }
   function connect() {
     retry = null;
+    if (useWorker && connectWorker()) { return; }
     try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { schedule(); return; }
     ws.binaryType = 'arraybuffer';
-    ws.onopen = function () {
+    ws.onopen = onOpen;
+    ws.onclose = onClose;
+    ws.onerror = function () {};
+    ws.onmessage = onMessage;
+  }
+  function onOpen() {
       // Buffered frames of the old connection: free their image data (object URLs hold the JPEG bytes).
       for (var i = 0; i < ready.length; i++) { URLx.revokeObjectURL(ready[i].url); release(ready[i].img); }
       queue = []; decoding = false; ready = []; playing = false;
@@ -274,11 +355,8 @@
       msg.style.display = 'none'; sendCfg();
       if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
       everOpen = true;
-    };
-    ws.onclose = function () { msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); };
-    ws.onerror = function () {};
-    ws.onmessage = onMessage;
   }
+  function onClose() { msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); }
   function schedule() { if (!retry) { retry = setTimeout(connect, 1500); } }
 
   // ---- frames ----
@@ -467,6 +545,7 @@
   }
   function ack(seq, dec, draw, wait, shown) {
     if (ws && ws.readyState === 1) { ws.send('ack:' + seq + ':' + dec + ':' + draw + ':' + wait + ':' + shown); }
+    wkAcked();
   }
 
   // ---- 5 s profiler (⏱ or ?prof=1) ----
@@ -538,7 +617,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.7.1-B · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.7.2-B · ' + (workerOn ? 'worker on · ' : 'worker off · ') + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -557,7 +636,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.7.1-B', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.7.2-B', worker: workerOn, ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

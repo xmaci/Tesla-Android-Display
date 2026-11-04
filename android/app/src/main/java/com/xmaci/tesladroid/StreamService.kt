@@ -460,8 +460,11 @@ class StreamService : Service(), CarServer.Listener {
             sock.tcpNoDelay = true
             sock.sendBufferSize = 32 * 1024
             sock.soTimeout = 0
+            // The boundary goes AFTER each frame, not before it: browsers treat a part as complete only
+            // when they see the next boundary. With the boundary in front, every frame was shown one frame
+            // late, and the last change on a still screen waited for the 2 s resend.
             out.write(("HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=tdframe\r\n" +
-                "Cache-Control: no-store\r\nConnection: close\r\n\r\n").toByteArray())
+                "Cache-Control: no-store\r\nConnection: close\r\n\r\n--tdframe\r\n").toByteArray())
             out.flush()
             val buf = ByteArrayOutputStream(256 * 1024)
             var lastSent = -1L
@@ -498,9 +501,9 @@ class StreamService : Service(), CarServer.Listener {
                 bmp.recycle()
                 val enc = (SystemClock.uptimeMillis() - t0).toInt()
                 val tw = SystemClock.uptimeMillis()
-                out.write(("--tdframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${buf.size()}\r\n\r\n").toByteArray())
+                out.write(("Content-Type: image/jpeg\r\nContent-Length: ${buf.size()}\r\n\r\n").toByteArray())
                 buf.writeTo(out)
-                out.write("\r\n".toByteArray())
+                out.write("\r\n--tdframe\r\n".toByteArray())          // closes this part at once
                 out.flush()                                      // blocks while the car is behind
                 lastWrite = SystemClock.uptimeMillis()
                 synchronized(lock) {

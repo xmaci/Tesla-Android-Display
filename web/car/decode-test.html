@@ -1,0 +1,175 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeslaDroid decode test</title>
+<style>
+  html, body { margin: 0; background: #111; color: #e6e6e6; font-family: sans-serif; }
+  #top { padding: 10px 14px; }
+  h1 { font-size: 22px; margin: 4px 0 6px; }
+  .sub { color: #999; font-size: 15px; }
+  button { font-size: 20px; padding: 10px 18px; margin: 8px 8px 8px 0; background: #2a6fdb; color: #fff; border: 0; border-radius: 8px; }
+  #out { font-family: monospace; font-size: 17px; line-height: 24px; white-space: pre-wrap; padding: 0 14px 14px; }
+  #cv { position: fixed; right: 8px; top: 8px; width: 108px; height: 240px; border: 1px solid #444; }
+</style>
+</head>
+<body>
+<div id="top">
+  <h1>Тест розпакування JPEG · Decode test</h1>
+  <div class="sub">Чи можна розпаковувати кадри у фонових потоках на цій машині? · Can this car decode frames in background threads?<br>
+  Кадр 432×960 q35. Займає ~1 хв. Сфотографуйте результат. · Frame 432×960 q35. Takes ~1 min. Photograph the result.</div>
+  <button id="go">▶ Старт · Start</button>
+</div>
+<canvas id="cv" width="432" height="960"></canvas>
+<div id="out"></div>
+<script>
+(function () {
+  'use strict';
+  var out = document.getElementById('out'), cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  var URLx = window.URL || window.webkitURL;
+  var perf = window.performance && performance.now ? performance : null;
+  function now() { return perf ? perf.now() : Date.now(); }
+  function log(s) { out.appendChild(document.createTextNode(s + '\n')); }
+  function med(a) { var b = a.slice().sort(function (x, y) { return x - y; }); return b.length ? Math.round(b[Math.floor(b.length / 2)]) : 0; }
+  function later(fn) { setTimeout(fn, 30); }
+
+  var jpeg = null, running = false;
+
+  // Main-thread lag while something runs: how late a 16 ms timer fires.
+  var lagOn = false, lags = [];
+  function lagStart() { lags = []; lagOn = true; (function tick() { var e = now() + 16; setTimeout(function () { if (!lagOn) { return; } lags.push(now() - e); tick(); }, 16); })(); }
+  function lagStop() { lagOn = false; var b = lags.slice().sort(function (x, y) { return x - y; }); return b.length ? Math.round(b[Math.min(b.length - 1, Math.floor(b.length * 0.95))]) : 0; }
+
+  function load(done) {
+    var x = new XMLHttpRequest();
+    x.open('GET', 'decode-sample.jpg?t=' + Date.now(), true);
+    x.responseType = 'arraybuffer';
+    x.onload = function () { jpeg = x.response; done(); };
+    x.onerror = function () { log('✗ cannot load decode-sample.jpg'); running = false; };
+    x.send();
+  }
+
+  // 1. The way the app works today: Blob → <img> → onload → drawImage, all on the main thread.
+  function testNative(done) {
+    var runs = 8, loadMs = [], drawMs = [], i = 0, img = new Image();
+    function one() {
+      if (i++ >= runs) {
+        var l = med(loadMs), d = med(drawMs);
+        log('1) Як зараз · Native <img>:  onload ' + l + ' ms + drawImage ' + d + ' ms = ' + (l + d) + ' ms on the main thread');
+        done(l + d); return;
+      }
+      var url = URLx.createObjectURL(new Blob([new Uint8Array(jpeg)], { type: 'image/jpeg' })), t0 = now();
+      img.onload = function () {
+        var t1 = now(); ctx.drawImage(img, 0, 0); var t2 = now();
+        loadMs.push(t1 - t0); drawMs.push(t2 - t1); URLx.revokeObjectURL(url); later(one);
+      };
+      img.onerror = function () { log('✗ native decode failed'); done(0); };
+      img.src = url;
+    }
+    one();
+  }
+
+  // 2. One worker, frames one after another: decode time inside the worker, the round trip,
+  //    and what is left for the main thread (copy into ImageData + putImageData).
+  var imgData = null;
+  function putPixels(buf) {
+    var t0 = now();
+    if (!imgData) { imgData = ctx.createImageData(432, 960); }
+    imgData.data.set(new Uint8Array(buf));
+    var t1 = now();
+    ctx.putImageData(imgData, 0, 0);
+    return [t1 - t0, now() - t1];
+  }
+  function makeWorker() { return new Worker('decode-worker.js'); }
+  function testOneWorker(done) {
+    var w;
+    try { w = makeWorker(); } catch (e) { log('2) ✗ Worker failed: ' + e.message); done(null); return; }
+    var runs = 8, i = 0, dec = [], trip = [], copy = [], put = [], copied = 0;
+    w.onmessage = function (e) {
+      var d = e.data;
+      if (d.error) { log('2) ✗ decode error: ' + d.error); w.terminate(); done(null); return; }
+      var tr = now() - w.t0, p = putPixels(d.buf);
+      if (d.copied) { copied++; }
+      if (i > 1) { dec.push(d.ms); trip.push(tr - d.ms); copy.push(p[0]); put.push(p[1]); }   // first 2 = warm-up (JIT)
+      if (i++ < runs + 1) { later(send); } else {
+        w.terminate();
+        var r = { dec: med(dec), trip: med(trip), copy: med(copy), put: med(put) };
+        log('2) 1 фоновий потік · 1 worker:  decode ' + r.dec + ' ms (in the worker)');
+        log('   transfer ' + r.trip + ' ms · copy to ImageData ' + r.copy + ' ms · putImageData ' + r.put + ' ms' + (copied ? ' · ⚠ buffers copied, not transferred' : ''));
+        log('   main thread per frame ≈ ' + (r.copy + r.put) + ' ms (+ part of transfer)');
+        done(r);
+      }
+    };
+    function send() { var b = jpeg.slice(0); w.t0 = now(); try { w.postMessage({ id: i, buf: b }, [b]); } catch (e) { w.postMessage({ id: i, buf: b }); } }
+    send();
+  }
+
+  // 3. Throughput with 1, 2, 3 workers decoding in parallel (main thread only receives),
+  //    and how busy the main thread is meanwhile.
+  function testParallel(n, done) {
+    var ws = [], total = 12, sent = 0, got = 0, t0, k, failed = false;
+    for (k = 0; k < n; k++) {
+      try { ws.push(makeWorker()); } catch (e) { log('3) ✗ ' + e.message); done(null); return; }
+    }
+    function feed(w) { if (sent >= total) { return; } var b = jpeg.slice(0); sent++; try { w.postMessage({ id: sent, buf: b }, [b]); } catch (e) { w.postMessage({ id: sent, buf: b }); } }
+    // warm up every worker once, then measure
+    var warm = 0;
+    for (k = 0; k < n; k++) {
+      (function (w) {
+        w.onmessage = function (e) {
+          if (e.data.error) { failed = true; }
+          if (warm < n) { warm++; if (warm === n) { start(); } return; }
+          got++;
+          if (got >= total) { finish(); } else { feed(w); }
+        };
+        var b = jpeg.slice(0); try { w.postMessage({ id: 0, buf: b }, [b]); } catch (x) { w.postMessage({ id: 0, buf: b }); }
+      })(ws[k]);
+    }
+    function start() { t0 = now(); lagStart(); for (var j = 0; j < n; j++) { feed(ws[j]); } }
+    function finish() {
+      var ms = now() - t0, lag = lagStop();
+      for (var j = 0; j < n; j++) { ws[j].terminate(); }
+      var fps = Math.round(total * 10000 / ms) / 10;
+      log('3) ' + n + ' потоки · ' + n + ' worker' + (n > 1 ? 's' : '') + ':  ' + fps + ' frames/s decoded · main-thread lag p95 ' + lag + ' ms' + (failed ? ' · ⚠ errors' : ''));
+      done(fps);
+    }
+  }
+
+  function run() {
+    if (running) { return; }
+    running = true; out.innerHTML = '';
+    log('UA: ' + navigator.userAgent);
+    load(function () {
+      log('sample: ' + jpeg.byteLength + ' bytes, 432×960 q35\n');
+      testNative(function (nativeMs) {
+        testOneWorker(function (one) {
+          if (!one) { running = false; return; }
+          var res = {};
+          testParallel(1, function (f1) { res[1] = f1;
+            testParallel(2, function (f2) { res[2] = f2;
+              testParallel(3, function (f3) { res[3] = f3;
+                var mainPer = Math.max(1, one.copy + one.put + Math.round(one.trip / 2));
+                var best = Math.max(res[1] || 0, res[2] || 0, res[3] || 0);
+                var cap = Math.round(10000 / mainPer) / 10;
+                nativeMs = Math.max(1, nativeMs);
+                log('\nПІДСУМОК · SUMMARY');
+                log('native main thread: ' + nativeMs + ' ms/frame → max ' + (nativeMs ? Math.round(10000 / nativeMs) / 10 : 0) + ' fps (decode+draw only)');
+                log('workers: main thread ≈ ' + mainPer + ' ms/frame → max ' + cap + ' fps; decode throughput ' + best + ' fps');
+                log('→ expected with workers ≈ ' + Math.min(cap, best) + ' fps (lower of the two)');
+                log(Math.min(cap, best) > (nativeMs ? 1000 / nativeMs : 0) * 1.3 ?
+                  '✅ Фонові потоки швидші · Workers look faster — worth building' :
+                  '❌ Виграшу немає · No clear gain — stay with native decode');
+                running = false;
+              });
+            });
+          });
+        });
+      });
+    });
+  }
+  document.getElementById('go').addEventListener('click', run, false);
+})();
+</script>
+</body>
+</html>

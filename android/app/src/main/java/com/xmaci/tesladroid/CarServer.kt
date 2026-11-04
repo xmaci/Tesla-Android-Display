@@ -136,6 +136,7 @@ class CarServer(
             "js" -> "application/javascript; charset=utf-8"
             "css" -> "text/css"
             "png" -> "image/png"
+            "jpg" -> "image/jpeg"
             "svg" -> "image/svg+xml"
             else -> "application/octet-stream"
         }

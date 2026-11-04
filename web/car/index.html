@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.7.2-B</div>
+  <div id="ver">v0.7.3-B</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -69,6 +69,8 @@
     <div class="hint" id="fpsHint" style="display:none"></div></div>
   <div class="row"><div class="lbl">Буфер кадрів (плавність, + затримка) · Frame buffer (smoother, adds delay)</div><div id="optB"></div>
     <div class="hint">лише gpu / draw / fit / 1:1 · дотик скидає буфер · only canvas views · a touch empties it</div></div>
+  <div class="row"><div class="lbl">Фоновий потік для кадрів · Background thread for frames</div><div id="optK"></div>
+    <div class="hint" id="wkHint">…</div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
     <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
   <div class="row"><div class="lbl">Повний екран · Full screen</div><button id="bFull">Спробувати · Try</button>
@@ -110,7 +112,8 @@
     v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img'],
     s: ['fast', 'smooth'],
     f: ['a', '5', '10', '15', '20', '30', '0'],
-    b: ['0', '1', '2', 'a']
+    b: ['0', '1', '2', 'a'],
+    k: ['1', '0']
   };
   // Defaults by car: MCU1 (QtCarBrowser, Tegra) is slow → small MJPEG; Intel/Ryzen (Chromium) measured
   // 35–50 fps in gpu / 1:1 / fit → canvas view at a larger size. Saved choices always win.
@@ -122,7 +125,8 @@
     v: param('mode') || load('v', mcu1 ? 'mjpeg' : 'gpu'),
     s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
     f: param('fps') || load('f3', '15'),         // MJPEG frame cap; 0 = none, a = follow the car's load
-    b: param('buf') || load('b', '0')           // frame buffer in canvas views: 0 off, 1, 2, a = auto
+    b: param('buf') || load('b', '0'),          // frame buffer in canvas views: 0 off, 1, 2, a = auto
+    k: param('worker') || load('k', '1')        // WebSocket in a background worker: 1 on, 0 off
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -199,6 +203,7 @@
     if (key === 'v') { layout(); }
     if (key === 's') { applyScaling(); return; }
     if (key === 'b') { tick(); return; }
+    if (key === 'k') { useWorker = !!window.Worker && val === '1'; reconnectNow(); return; }
     sendCfg();
   }
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
@@ -208,6 +213,8 @@
   buildOptions('s', 'optS', function (v) { return v === 'fast' ? 'Швидко · Fast' : 'Гладко · Smooth'; });
   buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v === 'a' ? 'Auto' : v; });
   buildOptions('b', 'optB', function (v) { return v === '0' ? 'Off' : v === 'a' ? 'Auto' : v; });
+  buildOptions('k', 'optK', function (v) { return v === '1' ? 'On' : 'Off'; });
+  wkHint();
   markOptions(); applyScaling();
   var panelOpen = false;
   function showPanel(open) { panelOpen = open; panel.style.display = open ? 'block' : 'none'; }
@@ -261,7 +268,7 @@
   layout();
 
   // ---- connection ----
-  // v0.7.2-B (design by the competing model): the WebSocket lives in a Web Worker. On MCU1 one thread runs
+  // v0.7.3-B (design by the competing model): the WebSocket lives in a Web Worker. On MCU1 one thread runs
   // JavaScript, image decode and paint; while it decodes, nobody drains the socket. The worker reads frames
   // on its own thread, drops any update made obsolete by a newer full frame (acking it at once so the phone's
   // ×2 window never sticks) and hands the main thread ONE complete update at a time, only after the main
@@ -300,7 +307,22 @@
     '  else if (d.t === "close") { if (ws) { ws.close(); } }',
     '};'
   ].join('\n');
-  var useWorker = !!window.Worker && param('worker') !== '0', workerOn = false, wk = null, wkPending = 0, wkReadyTimer = null;
+  var useWorker = !!window.Worker && set.k === '1', workerOn = false, wk = null, wkPending = 0, wkReadyTimer = null;
+  // Panel line under the switch: what is actually running right now.
+  function wkHint() {
+    var el = document.getElementById('wkHint');
+    if (!el) { return; }
+    el.innerHTML = workerOn ? '✓ працює · running in the background' :
+      (set.k === '1' ? (window.Worker ? '✗ не запрацював, звичайний спосіб · did not start, using the normal path' : '✗ браузер не підтримує · not supported') :
+       'вимкнено, звичайний спосіб · off, normal path');
+  }
+  // Switch paths now: close whatever is open and connect again (the new connection resends settings).
+  function reconnectNow() {
+    if (retry) { clearTimeout(retry); retry = null; }
+    if (wk) { try { wk.postMessage({ t: 'close' }); } catch (e) {} killWorker(); }
+    else if (ws && ws.close) { ws.onclose = null; try { ws.close(); } catch (e) {} }
+    ws = null; wkHint(); connect();
+  }
   function wkReady() {
     if (wkReadyTimer) { clearTimeout(wkReadyTimer); wkReadyTimer = null; }
     if (wk) { wk.postMessage({ t: 'ready' }); }
@@ -314,12 +336,12 @@
     catch (e) { wk = null; return false; }
     facade = { readyState: 0, send: function (t) { if (wk) { wk.postMessage({ t: 'send', s: t }); } } };
     ws = facade;
-    function giveUp() { clearTimeout(timer); killWorker(); useWorker = false; ws = null; connect(); }
+    function giveUp() { clearTimeout(timer); killWorker(); useWorker = false; ws = null; wkHint(); connect(); }
     timer = setTimeout(function () { if (!opened) { giveUp(); } }, 2000);
     wk.onerror = function () { if (!opened) { giveUp(); } };
     wk.onmessage = function (e) {
       var d = e.data, i;
-      if (d.t === 'open') { opened = true; clearTimeout(timer); workerOn = true; facade.readyState = 1; wkPending = 0; onOpen(); }
+      if (d.t === 'open') { opened = true; clearTimeout(timer); workerOn = true; facade.readyState = 1; wkPending = 0; wkHint(); onOpen(); }
       else if (d.t === 'text') { onMessage({ data: d.d }); }
       else if (d.t === 'update') {
         wkPending = d.items.length;
@@ -356,7 +378,8 @@
       if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
       everOpen = true;
   }
-  function onClose() { msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); }
+  function onClose() {
+    wkHint(); msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); }
   function schedule() { if (!retry) { retry = setTimeout(connect, 1500); } }
 
   // ---- frames ----
@@ -617,7 +640,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.7.2-B · ' + (workerOn ? 'worker on · ' : 'worker off · ') + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.7.3-B · ' + (workerOn ? 'worker on · ' : 'worker off · ') + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -636,7 +659,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.7.2-B', worker: workerOn, ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.7.3-B', worker: workerOn, ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

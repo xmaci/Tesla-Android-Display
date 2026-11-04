@@ -1,0 +1,251 @@
+--- a/web/car/index.html
++++ b/web/car/index.html
+@@ -54,7 +54,7 @@
+   <button id="bRe">↻</button>
+   <button id="bProf">5s</button>
+   <div id="stats">…</div>
+-  <div id="ver">v0.6.0</div>
++  <div id="ver">v0.7.0-B</div>
+ </div>
+ <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
+ <div id="prof"></div>
+@@ -65,7 +65,8 @@
+   <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
+   <div class="row"><div class="lbl">Кадрів у дорозі · Frames in flight</div><div id="optN"></div></div>
+   <div class="row"><div class="lbl">Масштабування · Scaling</div><div id="optS"></div></div>
+-  <div class="row"><div class="lbl">Макс. кадрів/с (mjpeg) · Max fps (mjpeg)</div><div id="optF"></div></div>
++  <div class="row"><div class="lbl">Макс. кадрів/с (mjpeg) · Max fps (mjpeg)</div><div id="optF"></div>
++    <div class="hint" id="fpsHint" style="display:none"></div></div>
+   <div class="row"><div class="lbl">Буфер кадрів (плавність, + затримка) · Frame buffer (smoother, adds delay)</div><div id="optB"></div>
+     <div class="hint">лише gpu / draw / fit / 1:1 · дотик скидає буфер · only canvas views · a touch empties it</div></div>
+   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
+@@ -129,8 +130,33 @@
+   function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
+   var frameW = 0, frameH = 0;
+ 
++  function mjBudget() {
++    // MCU1 software-decodes every MJPEG part on the main thread. 432×960 at 13 fps froze it
++    // (js lag p95 ~1.5 s); ~2.4 Mpx/s stays in the range where 320×710 still ran. 320 is under
++    // 300k px, so it keeps the user's cap. Chromium never takes this branch.
++    if (!mcu1 || !isMj() || !frameW || !frameH) { return 0; }
++    if (frameW * frameH <= 300000) { return 0; }
++    var b = Math.floor(2400000 / (frameW * frameH));
++    if (b < 4) { b = 4; }
++    if (b > 30) { b = 30; }
++    return b;
++  }
++  function refreshFpsHint() {
++    var el = document.getElementById('fpsHint'), b = mjBudget();
++    if (!el) { return; }
++    if (!b) { el.style.display = 'none'; return; }
++    el.style.display = 'block';
++    el.innerHTML = 'MCU1: темп ≤ ' + b + ' кадр/с для цього розміру · pace capped at ' + b + ' fps for this size';
++  }
+   function sendCfg() {
+-    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + set.f); }
++    if (!(ws && ws.readyState === 1)) { return; }
++    var budget = mjBudget(), fpsField = set.f;
++    if (budget > 0 && fpsField !== 'a') {
++      var asked = fpsField === '0' ? 60 : (+fpsField || 15);
++      if (asked > budget) { fpsField = String(budget); }
++    }
++    ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + fpsField + ':' + budget);
++    refreshFpsHint();
+   }
+   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
+ 
+@@ -270,7 +296,7 @@
+       if (d.indexOf('s:') === 0) {
+         try { server = JSON.parse(d.substr(2)); } catch (e) {}
+         // In MJPEG views the frame size is only known from the phone's stats.
+-        if (isMj() && server.w && (server.w !== frameW || server.h !== frameH)) { frameW = server.w; frameH = server.h; layout(); }
++        if (isMj() && server.w && (server.w !== frameW || server.h !== frameH)) { frameW = server.w; frameH = server.h; layout(); sendCfg(); }
+         showStats();
+       }
+       else if (d.indexOf('ti:') === 0) {
+@@ -292,8 +318,10 @@
+     queue.push(f);
+     pump();
+   }
+-  // Arrival rhythm of complete updates: the buffer shows frames at this steady interval.
++  // Arrival rhythm of complete updates. Only the frame buffer reads this, and the buffer is off
++  // on MCU1: sorting a copy of the gap list on every frame was pure GC on the main thread.
+   function noteArrival(t) {
++    if (!bufOn()) { return; }
+     if (lastArrive) {
+       var g = Math.min(500, t - lastArrive);
+       interval = Math.max(16, Math.min(250, interval * 0.9 + g * 0.1));
+@@ -312,6 +340,12 @@
+     return set.b === 'a' ? autoTarget : +set.b;
+   }
+   function isFull(f) { return f.x === 0 && f.y === 0 && f.rw === f.fw && f.rh === f.fh; }
++  // The decoded frame is already out of the queue, so any full frame still queued is newer and
++  // replaces it. Drawing first would burn a blit the screen never keeps. Partials stay ordered.
++  function newerFullQueued() {
++    for (var i = 0; i < queue.length; i++) { if (isFull(queue[i])) { return true; } }
++    return false;
++  }
+ 
+   function pump() {
+     if (decoding || !queue.length) { return; }
+@@ -336,6 +370,10 @@
+         ack(f.seq, f.dec, 0, f.wait, 1);          // decoded: the phone may send the next one
+         ready.push({ f: f, img: img, url: url });
+         tick(); pump();
++      } else if (newerFullQueued()) {
++        URLx.revokeObjectURL(url); release(img);
++        ack(f.seq, f.dec, 0, f.wait, 0);
++        pump();
+       } else {
+         present({ f: f, img: img, url: url }, 0);
+         pump();
+@@ -407,11 +445,17 @@
+     var back = 1 - front, el = shots[back];
+     el.onload = function () {
+       var t1 = now();
++      f.t1 = t1; f.dec = Math.round(t1 - f.t0);
++      if (newerFullQueued()) {
++        URLx.revokeObjectURL(url);
++        ack(f.seq, f.dec, 0, f.wait, 0);
++        decoding = false; pump();
++        return;
++      }
+       if (frameW !== f.fw || frameH !== f.fh) { frameW = f.fw; frameH = f.fh; layout(); }
+       el.style.display = 'block'; shots[front].style.display = 'none';
+       if (shotUrls[front]) { URLx.revokeObjectURL(shotUrls[front]); }
+       shotUrls[back] = url; front = back;
+-      f.t1 = t1; f.dec = Math.round(t1 - f.t0);
+       var draw = Math.round(now() - t1);
+       ack(f.seq, f.dec, draw, f.wait, 1);
+       if (!f.more) { frames++; }
+@@ -494,7 +538,7 @@
+     }
+     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
+     var lines = [
+-      'PROFILE 5 s · v0.6.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
++      'PROFILE 5 s · v0.7.0-B · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+         (bufOn() ? ' · buf ' + set.b : ''),
+       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
+         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
+@@ -513,7 +557,7 @@
+     profEl.appendChild(document.createTextNode(lines.join('\n')));
+     profEl.style.display = 'block';
+     profBtn.innerHTML = '5s';
+-    var payload = { v: '0.6.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
++    var payload = { v: '0.7.0-B', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
+                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
+                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,
+--- a/android/app/src/main/java/com/xmaci/tesladroid/StreamService.kt
++++ b/android/app/src/main/java/com/xmaci/tesladroid/StreamService.kt
+@@ -37,8 +37,9 @@
+  * so delay stays at about one frame instead of growing (the 15 s seen with other apps).
+  *
+  * Protocol (WebSocket /ws)
+- *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<max fps, 0 = no cap, a = follow car load>"
+- *                 frame width, JPEG quality, frames in flight, sub-rects ok (m = MJPEG view), MJPEG rate
++ *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<max fps, 0 = no cap, a = follow car load>[:budget]"
++ *                 frame width, JPEG quality, frames in flight, sub-rects ok (m = MJPEG view), MJPEG rate.
++ *                 Optional budget: MCU1 caps MJPEG fps for a large frame (0 = no cap). Ignored by older builds.
+  *                 "load:<ms>"               car page lag (worst timer delay in the last second)
+  *                 "prof:<json>"             5 s profile from the car page
+  *                 "full"                    car lost its picture (resized canvas): send a complete frame
+@@ -108,21 +109,29 @@
+      *  follows so the browser is never fed more frames than it can decode and paint. MCU1 measured: at
+      *  432×960 × 13 fps its page froze for 1.3–1.5 s at a time. */
+     @Volatile private var autoFps = 12.0
++    /** Car-requested MJPEG ceiling for a large MCU1 frame. 0 = no extra cap (320 and Chromium). */
++    @Volatile private var fpsBudget = 0
+     @Volatile private var carLag = 0
+     @Volatile private var lastLoadAt = 0L
+     @Volatile private var lastSilentStep = 0L
+-    private fun effectiveFps(): Int = if (maxFps < 0) autoFps.toInt() else maxFps
++    private fun effectiveFps(): Int {
++        val raw = if (maxFps < 0) autoFps.toInt() else maxFps
++        if (fpsBudget <= 0) return raw
++        if (raw <= 0) return fpsBudget
++        return minOf(raw, fpsBudget)
++    }
+     @Synchronized private fun onCarLoad(lag: Int) {
+         carLag = lag; lastLoadAt = SystemClock.uptimeMillis()
+         if (maxFps >= 0) return
+         // MCU1's page lags ~100-200 ms even at 2 fps (measured), so only real overload counts:
+         // 432x960 x 13 fps froze it 1.3-1.5 s, 320x710 x 13 fps stayed near 200 ms and felt smooth.
++        val hi = if (fpsBudget > 0) fpsBudget.toDouble().coerceAtLeast(4.0) else 20.0
+         autoFps = when {
+             lag > 600 -> autoFps * 0.6
+             lag > 300 -> autoFps * 0.85
+             lag < 200 -> autoFps + 1
+             else -> autoFps
+-        }.coerceIn(5.0, 20.0)
++        }.coerceIn(if (fpsBudget > 0) 4.0 else 5.0, hi)
+     }
+     /** No load report for 2.5 s = the car page is frozen: slow down without waiting for it. */
+     @Synchronized private fun checkCarSilent(now: Long) {
+@@ -366,8 +375,10 @@
+                 continue
+             }
+             // Large total change or a stale picture: send the whole frame (cleans JPEG seams too).
++            // 85% (was 60%): a scroll that leaves the status bar still stays one tight rect, not a
++            // full 432×960 decode. Borders are healed by the periodic full frame (10 s, was 6 s).
+             val total = rects.sumOf { it[2].toLong() * it[3] }
+-            if (total > fw.toLong() * fh * 6 / 10 || now - lastFullAt > 6000) rects = listOf(intArrayOf(0, 0, fw, fh))
++            if (total > fw.toLong() * fh * 85 / 100 || now - lastFullAt > 10000) rects = listOf(intArrayOf(0, 0, fw, fh))
+             if (rects.size == 1 && rects[0][2] == fw && rects[0][3] == fh) { lastFullAt = now; forceFull = false }
+             spare = shown
+             shown = cur; shownW = fw; shownH = fh
+@@ -381,7 +392,11 @@
+                 val part = if (rw == fw && rh == fh) full else Bitmap.createBitmap(full, rx, ry, rw, rh)
+                 val t0 = SystemClock.uptimeMillis()
+                 out.reset()
+-                part.compress(Bitmap.CompressFormat.JPEG, quality, out)
++                // Big rects dominate MCU1 decode time. Drop 10 quality points only then; typing
++                // (small rects) keeps the requested quality so glyphs stay sharp. q35 → q25.
++                val big = rw.toLong() * rh * 2 >= fw.toLong() * fh
++                val qUse = if (big) minOf(quality, maxOf(22, quality - 10)) else quality
++                part.compress(Bitmap.CompressFormat.JPEG, qUse, out)
+                 val enc = (SystemClock.uptimeMillis() - t0).toInt()
+                 val jpeg = out.toByteArray()
+                 if (part !== full) part.recycle()
+@@ -389,7 +404,7 @@
+                 // seq u32 · frame w,h u16 · enc ms u16 · quality|more u16 · rect x,y,w,h u16  (20 bytes)
+                 val header = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
+                     .putInt(mseq.toInt()).putShort(fw.toShort()).putShort(fh.toShort())
+-                    .putShort(enc.coerceAtMost(65535).toShort()).putShort((quality or more).toShort())
++                    .putShort(enc.coerceAtMost(65535).toShort()).putShort((qUse or more).toShort())
+                     .putShort(rx.toShort()).putShort(ry.toShort()).putShort(rw.toShort()).putShort(rh.toShort())
+                     .array()
+                 val ok = conn?.sendBinary(header, jpeg) ?: false
+@@ -569,6 +584,8 @@
+                 lastCfgAt = SystemClock.uptimeMillis()
+                 forceFull = true
+                 p.getOrNull(5)?.let { maxFps = if (it == "a") -1 else (it.toIntOrNull() ?: 15).coerceIn(0, 60) }
++                fpsBudget = p.getOrNull(6)?.toIntOrNull()?.coerceIn(0, 30) ?: 0
++                if (fpsBudget > 0 && maxFps < 0) autoFps = autoFps.coerceIn(4.0, maxOf(4.0, fpsBudget.toDouble()))
+                 p.getOrNull(1)?.toIntOrNull()?.let {
+                     if (it != wantWidth) { wantWidth = it; resize(it) }
+                 }
+--- a/android/app/src/main/java/com/xmaci/tesladroid/MainActivity.kt
++++ b/android/app/src/main/java/com/xmaci/tesladroid/MainActivity.kt
+@@ -37,7 +37,7 @@
+ class MainActivity : Activity() {
+ 
+     private companion object {
+-        const val VERSION = "0.6.0"
++        const val VERSION = "0.7.0-B"
+         const val REQ_VPN = 1
+         const val REQ_CAPTURE = 2
+         const val REQ_NOTIF = 3
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -11,8 +11,8 @@
+         applicationId = "com.xmaci.tesladroid"
+         minSdk = 33
+         targetSdk = 35
+-        versionCode = 33
+-        versionName = "0.6.0"
++        versionCode = 34
++        versionName = "0.7.0-B"
+         ndk { abiFilters += setOf("arm64-v8a") }   // Pixel 7 and other modern phones
+     }
+ 

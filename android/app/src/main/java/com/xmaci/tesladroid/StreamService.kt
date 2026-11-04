@@ -37,8 +37,9 @@ import java.nio.ByteOrder
  * so delay stays at about one frame instead of growing (the 15 s seen with other apps).
  *
  * Protocol (WebSocket /ws)
- *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<max fps, 0 = no cap, a = follow car load>"
- *                 frame width, JPEG quality, frames in flight, sub-rects ok (m = MJPEG view), MJPEG rate
+ *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<max fps, 0 = no cap, a = follow car load>[:budget]"
+ *                 frame width, JPEG quality, frames in flight, sub-rects ok (m = MJPEG view), MJPEG rate.
+ *                 Optional budget: MCU1 caps MJPEG fps for a large frame (0 = no cap). Ignored by older builds.
  *                 "load:<ms>"               car page lag (worst timer delay in the last second)
  *                 "prof:<json>"             5 s profile from the car page
  *                 "full"                    car lost its picture (resized canvas): send a complete frame
@@ -108,21 +109,29 @@ class StreamService : Service(), CarServer.Listener {
      *  follows so the browser is never fed more frames than it can decode and paint. MCU1 measured: at
      *  432×960 × 13 fps its page froze for 1.3–1.5 s at a time. */
     @Volatile private var autoFps = 12.0
+    /** Car-requested MJPEG ceiling for a large MCU1 frame. 0 = no extra cap (320 and Chromium). */
+    @Volatile private var fpsBudget = 0
     @Volatile private var carLag = 0
     @Volatile private var lastLoadAt = 0L
     @Volatile private var lastSilentStep = 0L
-    private fun effectiveFps(): Int = if (maxFps < 0) autoFps.toInt() else maxFps
+    private fun effectiveFps(): Int {
+        val raw = if (maxFps < 0) autoFps.toInt() else maxFps
+        if (fpsBudget <= 0) return raw
+        if (raw <= 0) return fpsBudget
+        return minOf(raw, fpsBudget)
+    }
     @Synchronized private fun onCarLoad(lag: Int) {
         carLag = lag; lastLoadAt = SystemClock.uptimeMillis()
         if (maxFps >= 0) return
         // MCU1's page lags ~100-200 ms even at 2 fps (measured), so only real overload counts:
         // 432x960 x 13 fps froze it 1.3-1.5 s, 320x710 x 13 fps stayed near 200 ms and felt smooth.
+        val hi = if (fpsBudget > 0) fpsBudget.toDouble().coerceAtLeast(4.0) else 20.0
         autoFps = when {
             lag > 600 -> autoFps * 0.6
             lag > 300 -> autoFps * 0.85
             lag < 200 -> autoFps + 1
             else -> autoFps
-        }.coerceIn(5.0, 20.0)
+        }.coerceIn(if (fpsBudget > 0) 4.0 else 5.0, hi)
     }
     /** No load report for 2.5 s = the car page is frozen: slow down without waiting for it. */
     @Synchronized private fun checkCarSilent(now: Long) {
@@ -366,8 +375,10 @@ class StreamService : Service(), CarServer.Listener {
                 continue
             }
             // Large total change or a stale picture: send the whole frame (cleans JPEG seams too).
+            // 85% (was 60%): a scroll that leaves the status bar still stays one tight rect, not a
+            // full 432×960 decode. Borders are healed by the periodic full frame (10 s, was 6 s).
             val total = rects.sumOf { it[2].toLong() * it[3] }
-            if (total > fw.toLong() * fh * 6 / 10 || now - lastFullAt > 6000) rects = listOf(intArrayOf(0, 0, fw, fh))
+            if (total > fw.toLong() * fh * 85 / 100 || now - lastFullAt > 10000) rects = listOf(intArrayOf(0, 0, fw, fh))
             if (rects.size == 1 && rects[0][2] == fw && rects[0][3] == fh) { lastFullAt = now; forceFull = false }
             spare = shown
             shown = cur; shownW = fw; shownH = fh
@@ -381,7 +392,11 @@ class StreamService : Service(), CarServer.Listener {
                 val part = if (rw == fw && rh == fh) full else Bitmap.createBitmap(full, rx, ry, rw, rh)
                 val t0 = SystemClock.uptimeMillis()
                 out.reset()
-                part.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                // Big rects dominate MCU1 decode time. Drop 10 quality points only then; typing
+                // (small rects) keeps the requested quality so glyphs stay sharp. q35 → q25.
+                val big = rw.toLong() * rh * 2 >= fw.toLong() * fh
+                val qUse = if (big) minOf(quality, maxOf(22, quality - 10)) else quality
+                part.compress(Bitmap.CompressFormat.JPEG, qUse, out)
                 val enc = (SystemClock.uptimeMillis() - t0).toInt()
                 val jpeg = out.toByteArray()
                 if (part !== full) part.recycle()
@@ -389,7 +404,7 @@ class StreamService : Service(), CarServer.Listener {
                 // seq u32 · frame w,h u16 · enc ms u16 · quality|more u16 · rect x,y,w,h u16  (20 bytes)
                 val header = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
                     .putInt(mseq.toInt()).putShort(fw.toShort()).putShort(fh.toShort())
-                    .putShort(enc.coerceAtMost(65535).toShort()).putShort((quality or more).toShort())
+                    .putShort(enc.coerceAtMost(65535).toShort()).putShort((qUse or more).toShort())
                     .putShort(rx.toShort()).putShort(ry.toShort()).putShort(rw.toShort()).putShort(rh.toShort())
                     .array()
                 val ok = conn?.sendBinary(header, jpeg) ?: false
@@ -569,6 +584,8 @@ class StreamService : Service(), CarServer.Listener {
                 lastCfgAt = SystemClock.uptimeMillis()
                 forceFull = true
                 p.getOrNull(5)?.let { maxFps = if (it == "a") -1 else (it.toIntOrNull() ?: 15).coerceIn(0, 60) }
+                fpsBudget = p.getOrNull(6)?.toIntOrNull()?.coerceIn(0, 30) ?: 0
+                if (fpsBudget > 0 && maxFps < 0) autoFps = autoFps.coerceIn(4.0, maxOf(4.0, fpsBudget.toDouble()))
                 p.getOrNull(1)?.toIntOrNull()?.let {
                     if (it != wantWidth) { wantWidth = it; resize(it) }
                 }

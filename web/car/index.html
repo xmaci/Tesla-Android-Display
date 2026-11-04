@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.6.0</div>
+  <div id="ver">v0.7.0-B</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -65,7 +65,8 @@
   <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
   <div class="row"><div class="lbl">Кадрів у дорозі · Frames in flight</div><div id="optN"></div></div>
   <div class="row"><div class="lbl">Масштабування · Scaling</div><div id="optS"></div></div>
-  <div class="row"><div class="lbl">Макс. кадрів/с (mjpeg) · Max fps (mjpeg)</div><div id="optF"></div></div>
+  <div class="row"><div class="lbl">Макс. кадрів/с (mjpeg) · Max fps (mjpeg)</div><div id="optF"></div>
+    <div class="hint" id="fpsHint" style="display:none"></div></div>
   <div class="row"><div class="lbl">Буфер кадрів (плавність, + затримка) · Frame buffer (smoother, adds delay)</div><div id="optB"></div>
     <div class="hint">лише gpu / draw / fit / 1:1 · дотик скидає буфер · only canvas views · a touch empties it</div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
@@ -129,8 +130,33 @@
   function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
   var frameW = 0, frameH = 0;
 
+  function mjBudget() {
+    // MCU1 software-decodes every MJPEG part on the main thread. 432×960 at 13 fps froze it
+    // (js lag p95 ~1.5 s); ~2.4 Mpx/s stays in the range where 320×710 still ran. 320 is under
+    // 300k px, so it keeps the user's cap. Chromium never takes this branch.
+    if (!mcu1 || !isMj() || !frameW || !frameH) { return 0; }
+    if (frameW * frameH <= 300000) { return 0; }
+    var b = Math.floor(2400000 / (frameW * frameH));
+    if (b < 4) { b = 4; }
+    if (b > 30) { b = 30; }
+    return b;
+  }
+  function refreshFpsHint() {
+    var el = document.getElementById('fpsHint'), b = mjBudget();
+    if (!el) { return; }
+    if (!b) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.innerHTML = 'MCU1: темп ≤ ' + b + ' кадр/с для цього розміру · pace capped at ' + b + ' fps for this size';
+  }
   function sendCfg() {
-    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + set.f); }
+    if (!(ws && ws.readyState === 1)) { return; }
+    var budget = mjBudget(), fpsField = set.f;
+    if (budget > 0 && fpsField !== 'a') {
+      var asked = fpsField === '0' ? 60 : (+fpsField || 15);
+      if (asked > budget) { fpsField = String(budget); }
+    }
+    ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + fpsField + ':' + budget);
+    refreshFpsHint();
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
@@ -270,7 +296,7 @@
       if (d.indexOf('s:') === 0) {
         try { server = JSON.parse(d.substr(2)); } catch (e) {}
         // In MJPEG views the frame size is only known from the phone's stats.
-        if (isMj() && server.w && (server.w !== frameW || server.h !== frameH)) { frameW = server.w; frameH = server.h; layout(); }
+        if (isMj() && server.w && (server.w !== frameW || server.h !== frameH)) { frameW = server.w; frameH = server.h; layout(); sendCfg(); }
         showStats();
       }
       else if (d.indexOf('ti:') === 0) {
@@ -292,8 +318,10 @@
     queue.push(f);
     pump();
   }
-  // Arrival rhythm of complete updates: the buffer shows frames at this steady interval.
+  // Arrival rhythm of complete updates. Only the frame buffer reads this, and the buffer is off
+  // on MCU1: sorting a copy of the gap list on every frame was pure GC on the main thread.
   function noteArrival(t) {
+    if (!bufOn()) { return; }
     if (lastArrive) {
       var g = Math.min(500, t - lastArrive);
       interval = Math.max(16, Math.min(250, interval * 0.9 + g * 0.1));
@@ -312,6 +340,12 @@
     return set.b === 'a' ? autoTarget : +set.b;
   }
   function isFull(f) { return f.x === 0 && f.y === 0 && f.rw === f.fw && f.rh === f.fh; }
+  // The decoded frame is already out of the queue, so any full frame still queued is newer and
+  // replaces it. Drawing first would burn a blit the screen never keeps. Partials stay ordered.
+  function newerFullQueued() {
+    for (var i = 0; i < queue.length; i++) { if (isFull(queue[i])) { return true; } }
+    return false;
+  }
 
   function pump() {
     if (decoding || !queue.length) { return; }
@@ -336,6 +370,10 @@
         ack(f.seq, f.dec, 0, f.wait, 1);          // decoded: the phone may send the next one
         ready.push({ f: f, img: img, url: url });
         tick(); pump();
+      } else if (newerFullQueued()) {
+        URLx.revokeObjectURL(url); release(img);
+        ack(f.seq, f.dec, 0, f.wait, 0);
+        pump();
       } else {
         present({ f: f, img: img, url: url }, 0);
         pump();
@@ -407,11 +445,17 @@
     var back = 1 - front, el = shots[back];
     el.onload = function () {
       var t1 = now();
+      f.t1 = t1; f.dec = Math.round(t1 - f.t0);
+      if (newerFullQueued()) {
+        URLx.revokeObjectURL(url);
+        ack(f.seq, f.dec, 0, f.wait, 0);
+        decoding = false; pump();
+        return;
+      }
       if (frameW !== f.fw || frameH !== f.fh) { frameW = f.fw; frameH = f.fh; layout(); }
       el.style.display = 'block'; shots[front].style.display = 'none';
       if (shotUrls[front]) { URLx.revokeObjectURL(shotUrls[front]); }
       shotUrls[back] = url; front = back;
-      f.t1 = t1; f.dec = Math.round(t1 - f.t0);
       var draw = Math.round(now() - t1);
       ack(f.seq, f.dec, draw, f.wait, 1);
       if (!f.more) { frames++; }
@@ -494,7 +538,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.6.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.7.0-B · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -513,7 +557,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.6.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.7.0-B', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

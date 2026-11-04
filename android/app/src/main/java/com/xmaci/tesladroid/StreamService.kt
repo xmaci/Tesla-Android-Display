@@ -37,7 +37,7 @@ import java.nio.ByteOrder
  * so delay stays at about one frame instead of growing (the 15 s seen with other apps).
  *
  * Protocol (WebSocket /ws)
- *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<max fps, 0 = no cap, a = follow car load>"
+ *   car -> phone  "cfg:<width>:<quality>:<window>:<partial 1|0|m>:<max fps, 0 = no cap, a = follow car load>:<crop rows, 0 = none>"
  *                 frame width, JPEG quality, frames in flight, sub-rects ok (m = MJPEG view), MJPEG rate
  *                 "load:<ms>"               car page lag (worst timer delay in the last second)
  *                 "prof:<json>"             5 s profile from the car page
@@ -151,6 +151,12 @@ class StreamService : Service(), CarServer.Listener {
     @Volatile private var mjpegMode = false         // car shows the /mjpeg stream: WebSocket sends no frames
     @Volatile private var mjpegGen = 0              // newest /mjpeg client wins
     @Volatile private var lastCfgAt = 0L            // when the car last sent its settings
+    /** Rows the car can show without scaling (1:1 views), 0 = whole frame. In 1:1 the browser area is
+     *  ~650 rows tall but the portrait frame 960: a third of every frame was decoded and never seen. */
+    @Volatile private var cropReq = 0
+    /** Fraction of the captured height actually sent (touch y is relative to what the car shows). */
+    @Volatile private var sentFrac = 1f
+    private fun sendH(fh: Int): Int = if (cropReq in 64 until fh) (cropReq / 2) * 2 else fh
     private val mjOpen = java.util.concurrent.atomic.AtomicInteger(0)   // MJPEG streams being sent now
     @Volatile private var forceFull = true          // next frame must be complete (connect, resize, car request)
     private var shown: IntArray? = null             // car-side picture, frameW*frameH
@@ -339,7 +345,9 @@ class StreamService : Service(), CarServer.Listener {
                 if (mjpegMode || c == null || !c.open || inFlight.size >= window || captureSeq == sentCaptureSeq || frame == null) {
                     lock.wait(50)
                 } else {
-                    crop = Bitmap.createBitmap(frame!!, 0, 0, frameW, frameH)
+                    val ch = sendH(frameH)
+                    crop = Bitmap.createBitmap(frame!!, 0, 0, frameW, ch)
+                    sentFrac = ch.toFloat() / frameH
                     sentCaptureSeq = captureSeq
                     seq = ++sendSeq
                     captured = now
@@ -427,7 +435,7 @@ class StreamService : Service(), CarServer.Listener {
                 "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b," +
                 "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d,\"mjs\":%d}").format(
                 java.util.Locale.US, stFrames / secs, lat, (stBytes / sent / 1024), stEnc / sent, dec, draw, wait,
-                (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, frameH, quality, window,
+                (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, sendH(frameH), quality, window,
                 TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail,
                 if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get())
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
@@ -476,7 +484,9 @@ class StreamService : Service(), CarServer.Listener {
                     val idle = SystemClock.uptimeMillis() - lastWrite
                     // New capture, or resend the current one every 2 s (keeps the stream alive).
                     if (frame != null && (captureSeq != lastSent || idle > 2000)) {
-                        copy = Bitmap.createBitmap(frame!!, 0, 0, frameW, frameH)
+                        val ch = sendH(frameH)
+                        copy = Bitmap.createBitmap(frame!!, 0, 0, frameW, ch)
+                        sentFrac = ch.toFloat() / frameH
                         lastSent = captureSeq
                     } else lock.wait(40)
                 }
@@ -569,6 +579,7 @@ class StreamService : Service(), CarServer.Listener {
                 lastCfgAt = SystemClock.uptimeMillis()
                 forceFull = true
                 p.getOrNull(5)?.let { maxFps = if (it == "a") -1 else (it.toIntOrNull() ?: 15).coerceIn(0, 60) }
+                cropReq = p.getOrNull(6)?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 p.getOrNull(1)?.toIntOrNull()?.let {
                     if (it != wantWidth) { wantWidth = it; resize(it) }
                 }
@@ -606,7 +617,7 @@ class StreamService : Service(), CarServer.Listener {
 
     private fun touch(conn: CarServer.Conn, p: List<String>) {
         val x = (p.getOrNull(2)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * screenW
-        val y = (p.getOrNull(3)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * screenH
+        val y = (p.getOrNull(3)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * sentFrac * screenH
         synchronized(stroke) {
             when (p.getOrNull(1)) {
                 "d" -> { stroke.clear(); stroke.add(x to y); strokeStart = SystemClock.uptimeMillis() }

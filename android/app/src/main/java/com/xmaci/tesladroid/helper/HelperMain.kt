@@ -26,7 +26,7 @@ import kotlin.system.exitProcess
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 2
+    const val VERSION = 3
 
     @JvmStatic
     fun main(args: Array<String>) {

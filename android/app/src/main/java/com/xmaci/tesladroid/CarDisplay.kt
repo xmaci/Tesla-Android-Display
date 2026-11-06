@@ -111,6 +111,14 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
     fun key(name: String) = send("k $name")
     fun launch(component: String) = send("launch $component")
     fun resize(width: Int, height: Int, dpi: Int) = send("size $width $height $dpi")
+    /** off: the phone went to sleep — wake it (stays locked) and darken its panel; on: panel back on. */
+    fun phone(on: Boolean) = send("phone ${if (on) "on" else "off"}")
+
+    /** Lets queued lines (e.g. "phone on") reach the helper before the socket closes. */
+    fun flushAndStop() {
+        try { writer.submit { }.get(1500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
+        stop()
+    }
 
     fun stop() { stopped = true; close(); writer.shutdown() }
 

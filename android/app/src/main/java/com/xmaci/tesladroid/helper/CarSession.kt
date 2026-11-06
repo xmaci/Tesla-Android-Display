@@ -25,6 +25,7 @@ import java.net.Socket
  *   k <back|home|recents>     key on the display
  *   launch <pkg/cls>          start an activity on the display
  *   size <w> <h> <dpi>        resize the display
+ *   phone <off|on>            phone went to sleep: wake it (stays locked) and turn its panel off / back on
  * helper -> app, 16-byte header + body:
  *   type 1 (frame): w, h, length → RGBA rows, no padding (w*4 bytes each)
  *   type 2 (text):  length, 0, 0 → UTF-8 line ("OK <displayId> <flags>", "launch: …", "ERR …")
@@ -60,6 +61,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
     private var lastFrameAt = 0L
     private var pullPosted = false
     private var downTime = 0L
+    @Volatile private var panelOff = false
     @Volatile private var closed = false
     private val released = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -157,6 +159,13 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             })
             "launch" -> launch(p[1])
             "size" -> resize(p[1].toInt(), p[2].toInt(), p[3].toInt())
+            "phone" -> {
+                val w = Panel.wake()
+                if (p[1] == "off") Thread.sleep(700)          // let the panel come on first, then darken it
+                val r = Panel.set(p[1] != "off")
+                panelOff = p[1] == "off" && r.startsWith("panel off")
+                text("power: wake ${if (w) "ok" else "refused"}, $r")
+            }
         }
     }
 
@@ -211,6 +220,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
     private fun close() {
         closed = true
         if (!released.compareAndSet(false, true)) return
+        if (panelOff) { Panel.set(true); panelOff = false }   // never leave the phone with a dark panel
         handler.post {
             try { display?.release() } catch (_: Throwable) {}
             display = null

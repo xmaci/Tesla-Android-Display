@@ -232,6 +232,13 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         projection = mp
         mp.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
+                // Android ends screen capture when the phone locks. The car screen does not need it.
+                if (carMode) {
+                    status = "streaming (car screen; phone mirror stopped by Android)"
+                    captureHandler.post { try { display?.release() } catch (_: Throwable) {}; display = null }
+                    projection = null
+                    return
+                }
                 status = "screen capture stopped"
                 shutdown(); stopSelf()
             }
@@ -453,7 +460,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, sendH(frameH), quality, window,
                 TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail,
                 if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get(),
-                org.json.JSONObject.quote(car?.status?.also { carStatus = it } ?: ""))
+                org.json.JSONObject.quote(car?.status?.let { st -> (if (carPower.isEmpty()) st else "$st · $carPower").also { carStatus = it } } ?: ""))
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
             stArea = 0; stSent = 0; stIdle = 0
@@ -588,6 +595,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     override fun onClose(conn: CarServer.Conn) {
         synchronized(lock) { if (this.conn === conn) { this.conn = null; carConnected = false } }
+        if (carMode) { captureHandler.removeCallbacks(carGone); captureHandler.postDelayed(carGone, 120_000) }
     }
 
     override fun onText(conn: CarServer.Conn, text: String) {
@@ -669,12 +677,37 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         return Triple(w, h, dpi)
     }
 
+    /**
+     * Phone locked with the power key while the car screen runs: real sleep would stop the car screen,
+     * so the helper wakes the phone (it stays locked) and darkens only its panel. Pressing power again
+     * lights the panel (lock screen) — the phone is then used normally; the next press darkens it again.
+     */
+    @Volatile private var panelOff = false
+    @Volatile private var carPower = ""
+    private val screenOff = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            val cd = car ?: return
+            if (!carMode) return
+            if (panelOff) { panelOff = false; cd.phone(true) } else { panelOff = true; cd.phone(false) }
+        }
+    }
+    private var screenOffRegistered = false
+
+    /** Car gone for 2 minutes: light the panel again and let the phone sleep normally. */
+    private val carGone = Runnable {
+        if (carMode && !carConnected && panelOff) { panelOff = false; car?.phone(true) }
+    }
+
     @Synchronized private fun startCar() {
         car?.let { if (it.status.startsWith("✗")) stopCar() else return }   // a failed attempt is retried
         carMode = true
         captureHandler.post { display?.surface = null }      // pause the phone mirror while the car screen runs
         val (w, h, d) = carSize()
         car = CarDisplay(this, this).also { it.start(w, h, d, true) }
+        if (!screenOffRegistered) {
+            registerReceiver(screenOff, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF))
+            screenOffRegistered = true
+        }
         synchronized(lock) { forceFull = true; sentCaptureSeq = 0 }
         carStatus = "starting"
     }
@@ -682,9 +715,11 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     @Synchronized private fun stopCar() {
         val c = car ?: run { carMode = false; return }
         car = null
-        c.stop()
+        if (panelOff) { panelOff = false; c.phone(true); c.flushAndStop() } else c.stop()
+        if (screenOffRegistered) { try { unregisterReceiver(screenOff) } catch (_: Throwable) {}; screenOffRegistered = false }
         carMode = false
         carStatus = ""
+        if (projection == null) status = "car screen off; phone mirror was stopped by Android — restart streaming"
         captureHandler.post { display?.surface = reader?.surface }
         synchronized(lock) { forceFull = true; sentCaptureSeq = 0; lock.notifyAll() }
     }
@@ -709,7 +744,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     override fun onCarText(line: String) {
         // The display is ready: open the last app again (the screen is new and empty without a launcher).
         if (line.startsWith("OK ") && carLaunch.isNotEmpty()) car?.launch(carLaunch)
-        if (line.startsWith("launch:") || line.startsWith("ERR")) conn?.sendText("cd:" + line)
+        if (line.startsWith("launch:") || line.startsWith("ERR") || line.startsWith("power:")) conn?.sendText("cd:" + line)
+        if (line.startsWith("power:")) carPower = line
     }
 
     private fun touch(conn: CarServer.Conn, p: List<String>) {

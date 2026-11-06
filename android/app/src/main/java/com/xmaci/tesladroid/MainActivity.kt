@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.8.0"
+        const val VERSION = "0.9.0"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -153,9 +153,10 @@ class MainActivity : Activity() {
         advanced.addView(ipField)
         text(advanced, "Не приватна IP. Типово 7.7.7.8. · Must not be a private IP. Default 7.7.7.8.", 12f, color = GREY)
 
-        text(advanced, "Помічник (для майбутнього екрана у формі авто) · Helper (for the coming car-shaped display)", 15f, true)
-        text(advanced, "Потрібні «Параметри розробника» і Wi‑Fi. Звичайній трансляції не потрібен. · " +
-            "Needs Developer options and Wi‑Fi. Not needed for normal streaming.", 12f, color = GREY)
+        text(advanced, "Помічник (для екрана «Авто») · Helper (for the «Car» screen)", 15f, true)
+        text(advanced, "Запускати вдома: потрібні «Параметри розробника» і Wi‑Fi; далі працює до перезавантаження телефона. " +
+            "У Tesla: ⚙ → Екран → Авто. · Start it at home: needs Developer options and Wi‑Fi; then it runs until the phone reboots. " +
+            "In the Tesla: ⚙ → Screen → Car.", 12f, color = GREY)
         helperStatus = text(advanced, "", 13f)
         pairBtn = button(advanced, "Сполучити · Pair (Wireless debugging)") {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -295,6 +296,7 @@ class MainActivity : Activity() {
             append("address: ").append(if (CarVpnService.running) CarVpnService.address else "- ${CarVpnService.lastError}")
                 .append(if (CarVpnService.rebuilds > 0) "  (rebuilt ${CarVpnService.rebuilds}×)" else "")
             append("\nstream: ").append(StreamService.status)
+            if (StreamService.carStatus.isNotEmpty()) append("\ncar screen: ").append(StreamService.carStatus)
             append("\nports: ").append(srv?.ports ?: "-")
             if (!srv?.lastError.isNullOrEmpty()) append("  (").append(srv?.lastError).append(")")
             append("\nif: ").append(interfaces())

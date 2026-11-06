@@ -45,12 +45,15 @@ import java.nio.ByteOrder
  *                 "ack:<seq>:<decodeMs>:<drawMs>:<waitMs>:<shown>"   frame handled (shown=0: skipped, newer one queued)
  *                 "t:<d|m|u>:<x>:<y>"       touch, x/y normalised 0..1
  *                 "k:<back|home|recents|notifications>"
+ *                 "mode:<phone|car>"         mirror the phone, or a car-shaped screen of its own (helper needed)
+ *                 "vp:<w>:<h>"               car browser area in CSS px (shape of the car screen)
+ *                 "launch:<pkg/cls>"         open an app on the car screen
  *   phone -> car  binary: 20-byte header (seq u32, frame w,h u16, encMs u16, q u16, rect x,y,w,h u16) + JPEG
  *                 of that rectangle only (partial update) or of the whole frame
  *                 "ti:<1|0|x>" touch injected / failed / no touch service
  *                 "s:{json}" stats once per second
  */
-class StreamService : Service(), CarServer.Listener {
+class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     companion object {
         private const val TAG = "TeslaDroid"
@@ -74,6 +77,9 @@ class StreamService : Service(), CarServer.Listener {
             private set
         /** Last 5 s profile from the car: one-line summary + where the JSON was saved. */
         @Volatile var lastProfile = ""
+            private set
+        /** Car-shaped screen: step-by-step state, "" when not in use. */
+        @Volatile var carStatus = ""
             private set
 
         fun start(ctx: Context, code: Int, data: Intent) {
@@ -156,7 +162,14 @@ class StreamService : Service(), CarServer.Listener {
     @Volatile private var cropReq = 0
     /** Fraction of the captured height actually sent (touch y is relative to what the car shows). */
     @Volatile private var sentFrac = 1f
-    private fun sendH(fh: Int): Int = if (cropReq in 64 until fh) (cropReq / 2) * 2 else fh
+    // Car-shaped screen (helper's virtual display) instead of the phone mirror
+    @Volatile private var carMode = false
+    @Volatile private var car: CarDisplay? = null
+    @Volatile private var vpW = 0
+    @Volatile private var vpH = 0
+    private var carLaunch = ""
+
+    private fun sendH(fh: Int): Int = if (carMode) fh else if (cropReq in 64 until fh) (cropReq / 2) * 2 else fh
     private val mjOpen = java.util.concurrent.atomic.AtomicInteger(0)   // MJPEG streams being sent now
     @Volatile private var forceFull = true          // next frame must be complete (connect, resize, car request)
     private var shown: IntArray? = null             // car-side picture, frameW*frameH
@@ -254,7 +267,7 @@ class StreamService : Service(), CarServer.Listener {
         override fun onDisplayAdded(id: Int) {}
         override fun onDisplayRemoved(id: Int) {}
         override fun onDisplayChanged(id: Int) {
-            if (id != Display.DEFAULT_DISPLAY) return
+            if (id != Display.DEFAULT_DISPLAY || carMode) return
             val oldW = screenW; val oldH = screenH
             readScreenSize()
             if ((oldW > oldH) != (screenW > screenH)) {
@@ -288,6 +301,7 @@ class StreamService : Service(), CarServer.Listener {
 
     /** Car asked for a different width: resize the virtual display onto a new reader. */
     private fun resize(width: Int) {
+        if (carMode) { car?.let { val (w, h, d) = carSize(); it.resize(w, h, d) }; return }
         captureHandler.post {
             val (w, h) = frameSize(width)
             if (w == frameW && h == frameH) return@post
@@ -303,6 +317,7 @@ class StreamService : Service(), CarServer.Listener {
 
     private fun onImage(r: ImageReader) {
         val img = try { r.acquireLatestImage() } catch (_: Throwable) { null } ?: return
+        if (carMode) { img.close(); return }
         try {
             val plane = img.planes[0]
             val padW = plane.rowStride / plane.pixelStride
@@ -433,11 +448,12 @@ class StreamService : Service(), CarServer.Listener {
             val sent = stSent.coerceAtLeast(1)
             json = ("{\"fps\":%.1f,\"lat\":%d,\"kb\":%d,\"enc\":%d,\"dec\":%d,\"draw\":%d,\"wait\":%d," +
                 "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b," +
-                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d,\"mjs\":%d}").format(
+                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d,\"mjs\":%d,\"cd\":%s}").format(
                 java.util.Locale.US, stFrames / secs, lat, (stBytes / sent / 1024), stEnc / sent, dec, draw, wait,
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, sendH(frameH), quality, window,
                 TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail,
-                if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get())
+                if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get(),
+                org.json.JSONObject.quote(car?.status?.also { carStatus = it } ?: ""))
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
             stArea = 0; stSent = 0; stIdle = 0
@@ -459,6 +475,7 @@ class StreamService : Service(), CarServer.Listener {
      * still busy, and each loop sends only the newest capture, so frames never pile up.
      */
     override fun onHttp(path: String, sock: java.net.Socket, out: java.io.OutputStream): Boolean {
+        if (path == "/apps") { sendApps(out); return true }
         if (path != "/mjpeg") return false
         val gen = ++mjpegGen
         val startedAt = SystemClock.uptimeMillis()
@@ -541,6 +558,21 @@ class StreamService : Service(), CarServer.Listener {
         return true
     }
 
+    /** GET /apps -> [{"n":"Maps","c":"pkg/cls"}, …]: apps that can be opened on the car screen. */
+    private fun sendApps(out: java.io.OutputStream) {
+        val pm = packageManager
+        val list = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .map { it.loadLabel(pm).toString() to "${it.activityInfo.packageName}/${it.activityInfo.name}" }
+            .sortedBy { it.first.lowercase() }
+        val arr = org.json.JSONArray()
+        for ((n, c) in list) arr.put(org.json.JSONObject().put("n", n).put("c", c))
+        val body = arr.toString().toByteArray(Charsets.UTF_8)
+        out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ${body.size}\r\n" +
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n").toByteArray())
+        out.write(body); out.flush()
+    }
+
     // ---------- CarServer.Listener ----------
 
     override fun onOpen(conn: CarServer.Conn) {
@@ -592,7 +624,13 @@ class StreamService : Service(), CarServer.Listener {
             "prof" -> { val json = text.substring(5); Thread({ saveProfile(json) }, "profile-save").start() }
             "load" -> p.getOrNull(1)?.toIntOrNull()?.let { onCarLoad(it) }
             "t" -> touch(conn, p)
-            "k" -> TouchService.instance?.key(p.getOrNull(1) ?: "")
+            "k" -> { val k = p.getOrNull(1) ?: ""; val c = car; if (carMode && c != null && k != "notifications") c.key(k) else TouchService.instance?.key(k) }
+            "mode" -> if (p.getOrNull(1) == "car") startCar() else stopCar()
+            "vp" -> {
+                val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
+                if (w >= 100 && h >= 100 && (w != vpW || h != vpH)) { vpW = w; vpH = h; if (carMode) resize(wantWidth) }
+            }
+            "launch" -> { val c = text.substring(7).trim(); carLaunch = c; car?.launch(c) }
         }
     }
 
@@ -618,7 +656,72 @@ class StreamService : Service(), CarServer.Listener {
         Log.i(TAG, "profile saved: $where")
     }
 
+    // ---------- car-shaped screen ----------
+
+    /** Car screen size: the car's frame width, the shape of its browser area (800×480 until it reports). */
+    private fun carSize(): Triple<Int, Int, Int> {
+        // At least 640 px: MCU1's default 320 would give an unusable ~320×190 screen; 640×370 is still
+        // fewer pixels than the 432×960 phone frame MCU1 already handles.
+        val w = (wantWidth.coerceIn(640, 1280) / 2) * 2
+        val aspect = if (vpW > 0 && vpH > 0) vpH.toFloat() / vpW else 0.6f
+        val h = ((w * aspect).toInt().coerceIn(200, 1600) / 2) * 2
+        val dpi = (w / 5).coerceIn(110, 240)          // 800 px → 160 dpi: an 800×480 dp tablet-like layout
+        return Triple(w, h, dpi)
+    }
+
+    @Synchronized private fun startCar() {
+        car?.let { if (it.status.startsWith("✗")) stopCar() else return }   // a failed attempt is retried
+        carMode = true
+        captureHandler.post { display?.surface = null }      // pause the phone mirror while the car screen runs
+        val (w, h, d) = carSize()
+        car = CarDisplay(this, this).also { it.start(w, h, d, true) }
+        synchronized(lock) { forceFull = true; sentCaptureSeq = 0 }
+        carStatus = "starting"
+    }
+
+    @Synchronized private fun stopCar() {
+        val c = car ?: run { carMode = false; return }
+        car = null
+        c.stop()
+        carMode = false
+        carStatus = ""
+        captureHandler.post { display?.surface = reader?.surface }
+        synchronized(lock) { forceFull = true; sentCaptureSeq = 0; lock.notifyAll() }
+    }
+
+    override fun onCarFrame(px: ByteArray, w: Int, h: Int) {
+        if (!carMode) return
+        synchronized(lock) {
+            var b = frame
+            if (b == null || b.width != w || b.height != h) {
+                b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                frame = b
+                forceFull = true
+            }
+            b.copyPixelsFromBuffer(ByteBuffer.wrap(px))
+            frameW = w; frameH = h
+            captureSeq++
+            stCaptured++
+            lock.notifyAll()
+        }
+    }
+
+    override fun onCarText(line: String) {
+        // The display is ready: open the last app again (the screen is new and empty without a launcher).
+        if (line.startsWith("OK ") && carLaunch.isNotEmpty()) car?.launch(carLaunch)
+        if (line.startsWith("launch:") || line.startsWith("ERR")) conn?.sendText("cd:" + line)
+    }
+
     private fun touch(conn: CarServer.Conn, p: List<String>) {
+        val c = car
+        if (carMode && c != null) {
+            val kind = p.getOrNull(1) ?: return
+            val x = (p.getOrNull(2)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * c.w
+            val y = (p.getOrNull(3)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * c.h
+            c.touch(kind, x, y)
+            if (kind == "u") { touchOk++; conn.sendText("ti:1") }
+            return
+        }
         val x = (p.getOrNull(2)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * screenW
         val y = (p.getOrNull(3)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * sentFrac * screenH
         synchronized(stroke) {
@@ -643,6 +746,7 @@ class StreamService : Service(), CarServer.Listener {
 
     private fun shutdown() {
         running = false
+        stopCar()
         status = if (status == "streaming") "stopped" else status
         sender?.interrupt(); sender = null
         server?.stop(); server = null; instanceServer = null

@@ -1,5 +1,6 @@
 package com.xmaci.tesladroid.helper
 
+import android.os.Looper
 import android.system.Os
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -15,17 +16,17 @@ import kotlin.system.exitProcess
  * so it runs as the `shell` user (uid 2000) and keeps running after debugging is turned off,
  * until the phone reboots.
  *
- * M1 step 2a: only proves it is alive and privileged.
- * Step 2b adds the car-shaped virtual display; 2c adds app launch and input on it.
+ * v1: alive and privileged. v2: car-shaped virtual display with input and app launch (CarSession).
  *
  * Control socket: 127.0.0.1:7790, one text line per request. Every request starts with the
  * token the app passed at launch, so other apps on the phone cannot use the helper.
  *   "<token> hello"  -> "TDHELPER v=<version> uid=<uid> pid=<pid>"
  *   "<token> quit"   -> helper exits
+ *   "<token> display <w> <h> <dpi> <home 1|0>" -> keeps the socket open as a CarSession
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 1
+    const val VERSION = 2
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -38,14 +39,22 @@ object HelperMain {
             exitProcess(1)
         }
         println("TeslaDroid helper v$VERSION uid=${Os.getuid()} pid=${Os.getpid()}")
-        while (true) {
-            val s = try { server.accept() } catch (_: Exception) { break }
-            thread(isDaemon = true) { handle(s, token) }
+        // System services (DisplayManager, ImageReader callbacks) expect a main looper.
+        Looper.prepareMainLooper()
+        try { ShellEnv.context } catch (t: Throwable) { System.err.println("system context: $t") }
+        thread(name = "accept") {
+            while (true) {
+                val s = try { server.accept() } catch (_: Exception) { break }
+                thread(isDaemon = true) { handle(s, token) }
+            }
+            exitProcess(0)
         }
+        Looper.loop()
     }
 
     private fun handle(s: Socket, token: String) {
-        s.use { sock ->
+        var keep = false
+        try { s.use { sock ->
             sock.soTimeout = 5000
             val reader = BufferedReader(InputStreamReader(sock.getInputStream()))
             val out = sock.getOutputStream()
@@ -57,9 +66,20 @@ object HelperMain {
             when (parts[1]) {
                 "hello" -> out.write("TDHELPER v=$VERSION uid=${Os.getuid()} pid=${Os.getpid()}\n".toByteArray())
                 "quit" -> { out.write("BYE\n".toByteArray()); out.flush(); exitProcess(0) }
+                "display" -> {
+                    // display <w> <h> <dpi> <home 1|0>; the session owns the socket until the app closes it
+                    sock.soTimeout = 0
+                    sock.tcpNoDelay = true
+                    keep = true
+                    CarSession(sock, reader, parts[2].toInt(), parts[3].toInt(), parts[4].toInt(),
+                        parts.getOrNull(5) == "1").run()
+                    return
+                }
                 else -> out.write("ERR unknown\n".toByteArray())
             }
             out.flush()
+        } } catch (e: Exception) {
+            if (keep) System.err.println("session: $e")
         }
     }
 }

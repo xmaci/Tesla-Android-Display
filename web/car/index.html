@@ -42,6 +42,8 @@
   #panel button { font-size: 22px; min-width: 96px; height: 54px; margin: 0 8px 8px 0; background: #2b2b2b; color: #eee; border: 2px solid #2b2b2b; border-radius: 8px; }
   #panel button.on { background: #2a6fdb; border-color: #8fb4ff; }
   #panel .hint { font-size: 15px; color: #888; }
+  #appList { max-height: 300px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  #appList button { min-width: 180px; font-size: 19px; }
 </style>
 </head>
 <body>
@@ -54,12 +56,16 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.8.0</div>
+  <div id="ver">v0.9.0</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
 <div id="msg">Підключення… · Connecting…</div>
 <div id="panel">
+  <div class="row"><div class="lbl">Екран · Screen</div><div id="optD"></div>
+    <div class="hint" id="carRes">Авто = окремий екран у формі авто, телефон можна заблокувати (потрібен помічник) · Car = its own car-shaped screen, the phone can stay locked (needs the helper)</div></div>
+  <div class="row" id="appsRow" style="display:none"><div class="lbl">Програми · Apps</div>
+    <button id="bApps">Показати · Show</button><div id="appList"></div></div>
   <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div>
     <div class="hint">телефон горизонтально → 640–800 · phone in landscape → 640–800</div></div>
   <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
@@ -109,7 +115,8 @@
     v: ['mjpeg', 'mj1:1', 'gpu', 'draw', 'fit', '1:1', 'img'],
     s: ['fast', 'smooth'],
     f: ['a', '5', '10', '15', '20', '30', '0'],
-    b: ['0', '1', '2', 'a']
+    b: ['0', '1', '2', 'a'],
+    d: ['phone', 'car']
   };
   // Defaults by car: MCU1 (QtCarBrowser, Tegra) is slow → small MJPEG; Intel/Ryzen (Chromium) measured
   // 35–50 fps in gpu / 1:1 / fit → canvas view at a larger size. Saved choices always win.
@@ -121,7 +128,8 @@
     v: param('mode') || load('v', mcu1 ? 'mjpeg' : 'gpu'),
     s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
     f: param('fps') || load('f3', '15'),         // MJPEG frame cap; 0 = none, a = follow the car's load
-    b: param('buf') || load('b', '0')           // frame buffer in canvas views: 0 off, 1, 2, a = auto
+    b: param('buf') || load('b', '0'),          // frame buffer in canvas views: 0 off, 1, 2, a = auto
+    d: param('screen') || load('d', 'phone')    // phone = mirror the phone, car = car-shaped screen of its own
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -138,6 +146,17 @@
   // Several setting changes in one tap (view + crop) send one cfg: each cfg makes the phone send a full frame.
   var cfgPending = false;
   function sendCfgSoon() { if (!cfgPending) { cfgPending = true; setTimeout(function () { cfgPending = false; sendCfg(); }, 0); } }
+  // Car-shaped screen: the phone makes a display the shape of this browser area.
+  var vpSent = '';
+  function sendVp() {
+    var v = 'vp:' + wrap.clientWidth + ':' + wrap.clientHeight;
+    if (ws && ws.readyState === 1 && v !== vpSent) { vpSent = v; ws.send(v); }
+  }
+  function sendMode() {
+    if (!ws || ws.readyState !== 1) { return; }
+    vpSent = ''; sendVp(); ws.send('mode:' + set.d);
+    document.getElementById('appsRow').style.display = set.d === 'car' ? 'block' : 'none';
+  }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
   // One action per real tap. MCU1 delivers a tap as touchend + emulated click (sometimes late).
@@ -179,6 +198,7 @@
     if (key === 'v') { layout(); ensureLoadLoop(); }
     if (key === 's') { applyScaling(); return; }
     if (key === 'b') { tick(); return; }
+    if (key === 'd') { sendMode(); return; }
     sendCfgSoon();
   }
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
@@ -188,6 +208,34 @@
   buildOptions('s', 'optS', function (v) { return v === 'fast' ? 'Швидко · Fast' : 'Гладко · Smooth'; });
   buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v === 'a' ? 'Auto' : v; });
   buildOptions('b', 'optB', function (v) { return v === '0' ? 'Off' : v === 'a' ? 'Auto' : v; });
+  buildOptions('d', 'optD', function (v) { return v === 'car' ? 'Авто · Car' : 'Телефон · Phone'; });
+  document.getElementById('appsRow').style.display = set.d === 'car' ? 'block' : 'none';
+
+  // App list for the car screen (GET /apps from the phone).
+  function loadApps() {
+    var box = document.getElementById('appList'), x = new XMLHttpRequest();
+    box.innerHTML = '…';
+    x.open('GET', '/apps?t=' + new Date().getTime(), true);
+    x.onload = function () {
+      var list = [];
+      try { list = JSON.parse(x.responseText); } catch (e) { box.innerHTML = '✗'; return; }
+      box.innerHTML = '';
+      for (var i = 0; i < list.length; i++) {
+        (function (a) {
+          var b = document.createElement('button');
+          b.appendChild(document.createTextNode(a.n));
+          onTap(b, function () {
+            if (ws && ws.readyState === 1) { ws.send('launch:' + a.c); }
+            showPanel(false);
+          }, 800);
+          box.appendChild(b);
+        })(list[i]);
+      }
+    };
+    x.onerror = function () { box.innerHTML = '✗ /apps'; };
+    x.send();
+  }
+  onTap(document.getElementById('bApps'), loadApps, 1000);
   markOptions(); applyScaling();
   var panelOpen = false;
   function showPanel(open) { panelOpen = open; panel.style.display = open ? 'block' : 'none'; }
@@ -236,6 +284,7 @@
       s.style.left = left + 'px'; s.style.top = top + 'px';
       if (v !== 'img') { s.style.display = 'none'; }
     }
+    sendVp();
     // A resized canvas is blank: ask the phone for a complete frame.
     if (!isMj() && (canvas.width !== oldW || canvas.height !== oldH || v === 'img')) { askFull(); }
   }
@@ -253,7 +302,7 @@
       queue = []; decoding = false; ready = []; playing = false;
       if (presentTimer) { clearTimeout(presentTimer); presentTimer = null; }
       connGen++;
-      msg.style.display = 'none'; sendCfg();
+      msg.style.display = 'none'; sendCfg(); sendMode();
       if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
       everOpen = true;
     };
@@ -279,8 +328,10 @@
         try { server = JSON.parse(d.substr(2)); } catch (e) {}
         // In MJPEG views the frame size is only known from the phone's stats.
         if (isMj() && server.w && (server.w !== frameW || server.h !== frameH)) { frameW = server.w; frameH = server.h; layout(); }
+        if (set.d === 'car' && server.cd !== undefined && panelOpen) { document.getElementById('carRes').innerHTML = (server.cd || '…').replace(/</g, '&lt;'); }
         showStats();
       }
+      else if (d.indexOf('cd:') === 0) { document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('ti:') === 0) {
         var r = d.substr(3);
         if (r === '1') { touchOk++; } else if (r === 'x') { touchNoSvc++; } else { touchFail++; }
@@ -502,7 +553,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.8.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.9.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -521,7 +572,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.8.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.9.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

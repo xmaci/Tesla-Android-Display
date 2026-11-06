@@ -36,6 +36,10 @@ object Helper {
         }
     } catch (_: Exception) { null }
 
+    /** Running helper is new enough for the car display. */
+    fun ready(ctx: Context): Boolean =
+        (Regex("v=(\\d+)").find(ping(ctx) ?: "")?.groupValues?.get(1)?.toIntOrNull() ?: 0) >= HelperMain.VERSION
+
     fun ping(ctx: Context): String? = request(ctx, "hello").takeIf { it?.startsWith("TDHELPER") == true }.also { info = it }
 
     /**
@@ -43,7 +47,12 @@ object Helper {
      * starts the helper detached, so it survives turning debugging off. Blocking; call off the UI thread.
      */
     fun start(ctx: Context): String {
-        ping(ctx)?.let { return "already running: $it" }
+        ping(ctx)?.let {
+            // An older helper (from a previous app version) lacks newer commands: replace it.
+            val v = Regex("v=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            if (v >= HelperMain.VERSION) return "already running: $it"
+            request(ctx, "quit"); Thread.sleep(400)
+        }
         val adb = AdbManager.get(ctx)
         try {
             if (!adb.isConnected && !adb.connectTls(ctx, 10_000)) {

@@ -42,10 +42,10 @@ object HelperMain {
             System.err.println("already running or port busy: ${e.message}")
             exitProcess(1)
         }
-        println("TeslaDroid helper v$VERSION uid=${Os.getuid()} pid=${Os.getpid()}")
-        // System services (DisplayManager, ImageReader callbacks) expect a main looper.
-        Looper.prepareMainLooper()
-        try { ShellEnv.context } catch (t: Throwable) { System.err.println("system context: $t") }
+        log("TeslaDroid helper v$VERSION uid=${Os.getuid()} pid=${Os.getpid()} listening")
+        // System services (DisplayManager, ImageReader callbacks) expect a main looper. The system
+        // context itself is made later, on the first car-screen request, so "hello" always works.
+        try { Looper.prepareMainLooper() } catch (t: Throwable) { log("looper: $t") }
         thread(name = "accept") {
             while (true) {
                 val s = try { server!!.accept() } catch (_: Exception) { break }
@@ -55,6 +55,8 @@ object HelperMain {
         }
         Looper.loop()
     }
+
+    fun log(msg: String) { System.err.println(msg); System.err.flush() }
 
     private fun handle(s: Socket, token: String) {
         var keep = false
@@ -94,7 +96,7 @@ object HelperMain {
             }
             out.flush()
         } } catch (e: Exception) {
-            if (keep) System.err.println("session: $e")
+            if (keep) log("session: $e")
         }
     }
 }

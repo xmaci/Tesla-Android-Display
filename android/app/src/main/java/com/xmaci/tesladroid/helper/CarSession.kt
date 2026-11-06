@@ -78,6 +78,14 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
     }
 
     private fun create(): Boolean {
+        HelperMain.log("display ${w}x$h@$dpi home=$deco: system context…")
+        try { ShellEnv.displayManager } catch (t: Throwable) {
+            val c = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+            HelperMain.log("system context failed: $c")
+            text("ERR display: system context: ${c.javaClass.simpleName} ${c.message}")
+            return false
+        }
+        HelperMain.log("display: creating")
         val base = PUBLIC or PRESENTATION or OWN_CONTENT_ONLY or SUPPORTS_TOUCH or ROTATES_WITH_CONTENT or DESTROY_CONTENT_ON_REMOVAL
         val unlocked = TRUSTED or OWN_DISPLAY_GROUP or ALWAYS_UNLOCKED or TOUCH_FEEDBACK_DISABLED
         val focus = OWN_FOCUS or DEVICE_DISPLAY_GROUP

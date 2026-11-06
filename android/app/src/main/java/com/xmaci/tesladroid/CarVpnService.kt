@@ -67,25 +67,11 @@ class CarVpnService : VpnService() {
     private val rebuild = Runnable {
         if (!running && tun == null) return@Runnable
         // A car that is streaming fine proves the link works; don't cut it for a harmless blip.
-        if (StreamService.carConnected && addressPresent(address)) return@Runnable
+        if (StreamService.carConnected) return@Runnable
         Log.i(TAG, "network changed — rebuilding car link")
         rebuilds++
         establish()
     }
-
-    /** Every 10 s: if the car address vanished from all interfaces (the system dropped the tunnel), rebuild. */
-    private val health = object : Runnable {
-        override fun run() {
-            if (running && !addressPresent(address)) { Log.w(TAG, "car address missing — rebuilding"); rebuilds++; establish() }
-            main.postDelayed(this, 10_000)
-        }
-    }
-
-    private fun addressPresent(ip: String): Boolean = try {
-        java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().any { nif ->
-            nif.isUp && nif.inetAddresses.toList().any { it.hostAddress == ip }
-        }
-    } catch (_: Throwable) { true }
 
     override fun onCreate() {
         super.onCreate()
@@ -102,7 +88,6 @@ class CarVpnService : VpnService() {
             netCb = cb
         } catch (t: Throwable) { Log.w(TAG, "network callback", t) }
         main.postDelayed({ ready = true }, 3000)
-        main.postDelayed(health, 10_000)
     }
 
     private fun changed() {

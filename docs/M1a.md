@@ -285,3 +285,13 @@ Plus: did the page stay open while driving? Any disconnects?
 - Touch is sent when the finger lifts (no live drag yet).
 - No sound in the browser on MCU1 — use the phone's Bluetooth connection to the car as usual.
 - Anyone on your hotspot who knows the link can see and control the phone. Use a hotspot password.
+
+## 0.8.0 · 0.9.0 — cleanup and the car-shaped screen (stage 1)
+
+- 0.8.0: A's 1:1 crop merged into master. The VPN rebuilds itself after a network change, debounced 2 s, but only if the car is not connected or the address is gone. A 10 s health check also restores the address if it disappears. The Pair button is hidden once the phone is paired. B's worker WebSocket stays in branch `opt-b` and is not merged: there were no controlled measurements.
+- 0.9.0: in the car menu, ⚙ → Екран · Screen → Авто · Car.
+  - Helper v2 (shell user) creates a virtual display. Its width is the car's frame width (at least 640), its height follows the car browser area's shape, and dpi = width/5. Flags follow scrcpy `--new-display`: trusted, always unlocked, own display group and focus, system decorations (launcher). If some flags are refused, it falls back to weaker sets.
+  - Frames come to the app as raw RGBA over 127.0.0.1:7790, at up to 30/s, and go into the same JPEG/MJPEG pipeline.
+  - Touch and keys are injected with the display ID. `am start --display` opens apps; the car menu lists them from `GET /apps`.
+  - Diagnostics, steps 1/4–4/4: on the car (⚙ → Screen hint) and in the app (Advanced → car screen).
+  - Still to verify in the car: whether it works with the phone locked, the launcher on the display, and apps moving from the phone to the display.

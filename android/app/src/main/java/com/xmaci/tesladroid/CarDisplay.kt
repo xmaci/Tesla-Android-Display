@@ -21,6 +21,8 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
         /** Raw RGBA, [w]*[h]*4 bytes, valid only during the call. */
         fun onCarFrame(px: ByteArray, w: Int, h: Int)
         fun onCarText(line: String)
+        /** The car screen failed or the helper went away (not called after stop()). */
+        fun onCarEnded(display: CarDisplay)
     }
 
     @Volatile var displayId = -1
@@ -38,6 +40,8 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
     @Volatile private var sock: Socket? = null
     @Volatile private var out: OutputStream? = null
     @Volatile private var stopped = false
+    /** Older helper: the screen works, but not with the phone locked. */
+    @Volatile private var oldHelper = false
 
     fun start(width: Int, height: Int, dpi: Int, home: Boolean) {
         w = width; h = height
@@ -45,11 +49,22 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
     }
 
     private fun run(width: Int, height: Int, dpi: Int, home: Boolean) {
+        try { session(width, height, dpi, home) } finally { if (!stopped) listener.onCarEnded(this) }
+    }
+
+    private fun session(width: Int, height: Int, dpi: Int, home: Boolean) {
         status = "1/4 helper…"
-        if (!Helper.ready(ctx)) {
-            status = "✗ 1/4 помічник не запущено або старий (Додатково → Запустити) · helper not running or old (Advanced → Start helper)"
+        var v = Helper.runningVersion(ctx)
+        if (v in 3 until HelperMain.VERSION) { status = "1/4 оновлюю помічника · updating helper…"; Helper.upgrade(ctx); v = Helper.runningVersion(ctx) }
+        if (v == 0) {
+            status = "✗ 1/4 помічник не запущено — запустіть вдома через Wi‑Fi (Додатково → Запустити помічника) · helper not running — start it at home on Wi‑Fi (Advanced → Start helper)"
             return
         }
+        if (v < 2) {
+            status = "✗ 1/4 помічник v$v застарий — перезапустіть вдома через Wi‑Fi · helper v$v too old — restart it at home on Wi‑Fi"
+            return
+        }
+        oldHelper = v < HelperMain.VERSION
         try {
             val s = Socket()
             s.connect(InetSocketAddress("127.0.0.1", HelperMain.PORT), 2000)
@@ -70,7 +85,8 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
                         if (px.size != c) px = ByteArray(c)
                         input.readFully(px)
                         w = a; h = b; frames++
-                        if (frames == 1) status = "✓ 4/4 кадри йдуть · frames flowing (display $displayId, ${a}×$b)"
+                        if (frames == 1) status = "✓ 4/4 кадри йдуть · frames flowing (display $displayId, ${a}×$b)" +
+                            (if (oldHelper) " · ⚠ помічник старий: з заблокованим телефоном не працюватиме, перезапустіть вдома · old helper: no locked phone, restart it at home" else "")
                         listener.onCarFrame(px, a, b)
                     }
                     2 -> {

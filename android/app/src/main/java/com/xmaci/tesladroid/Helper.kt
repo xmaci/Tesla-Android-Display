@@ -36,9 +36,9 @@ object Helper {
         }
     } catch (_: Exception) { null }
 
-    /** Running helper is new enough for the car display. */
-    fun ready(ctx: Context): Boolean =
-        (Regex("v=(\\d+)").find(ping(ctx) ?: "")?.groupValues?.get(1)?.toIntOrNull() ?: 0) >= HelperMain.VERSION
+    /** Version of the running helper, 0 if none. v2+ can make the car screen; v3 also keeps it alive when locked. */
+    fun runningVersion(ctx: Context): Int =
+        Regex("v=(\\d+)").find(ping(ctx) ?: "")?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
     fun ping(ctx: Context): String? = request(ctx, "hello").takeIf { it?.startsWith("TDHELPER") == true }.also { info = it }
 
@@ -51,6 +51,7 @@ object Helper {
             // An older helper (from a previous app version) lacks newer commands: replace it.
             val v = Regex("v=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             if (v >= HelperMain.VERSION) return "already running: $it"
+            if (v >= 3) upgrade(ctx)?.let { r -> return r }
             request(ctx, "quit"); Thread.sleep(400)
         }
         val adb = AdbManager.get(ctx)
@@ -87,6 +88,19 @@ object Helper {
         val diag = runShell(adb, "id; echo ---; cat /data/local/tmp/tesladroid-helper.log 2>&1 | tail -c 600; " +
             "echo ---; ps -A 2>/dev/null | grep -i tesladroid", 2500)
         return "helper did not answer.\nlaunch: ${launch.trim().ifEmpty { "(no output)" }}\n${diag.trim().take(900)}"
+    }
+
+    /**
+     * Helper v3+ restarts itself from the installed (newer) APK: no Wireless debugging or Wi‑Fi needed,
+     * so it works in the car. Returns a status line if the new helper answers, null otherwise.
+     */
+    fun upgrade(ctx: Context): String? {
+        if (request(ctx, "upgrade ${ctx.applicationInfo.sourceDir}")?.startsWith("UPGRADING") != true) return null
+        repeat(24) {
+            Thread.sleep(250)
+            ping(ctx)?.let { return "updated: $it" }
+        }
+        return null
     }
 
     fun stop(ctx: Context) { request(ctx, "quit"); info = null }

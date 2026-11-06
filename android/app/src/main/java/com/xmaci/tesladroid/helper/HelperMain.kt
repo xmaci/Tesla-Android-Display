@@ -23,16 +23,20 @@ import kotlin.system.exitProcess
  *   "<token> hello"  -> "TDHELPER v=<version> uid=<uid> pid=<pid>"
  *   "<token> quit"   -> helper exits
  *   "<token> display <w> <h> <dpi> <home 1|0>" -> keeps the socket open as a CarSession
+ *   "<token> upgrade <apk path>" -> starts the helper from a newer app version and exits (v3+), so
+ *                                   app updates don't need Wireless debugging / Wi‑Fi again
  */
 object HelperMain {
     const val PORT = 7790
     const val VERSION = 3
 
+    private var server: ServerSocket? = null
+
     @JvmStatic
     fun main(args: Array<String>) {
         val token = args.firstOrNull()
         if (token.isNullOrBlank()) { System.err.println("token required"); exitProcess(2) }
-        val server = try {
+        server = try {
             ServerSocket(PORT, 8, InetAddress.getByName("127.0.0.1"))
         } catch (e: Exception) {
             System.err.println("already running or port busy: ${e.message}")
@@ -44,7 +48,7 @@ object HelperMain {
         try { ShellEnv.context } catch (t: Throwable) { System.err.println("system context: $t") }
         thread(name = "accept") {
             while (true) {
-                val s = try { server.accept() } catch (_: Exception) { break }
+                val s = try { server!!.accept() } catch (_: Exception) { break }
                 thread(isDaemon = true) { handle(s, token) }
             }
             exitProcess(0)
@@ -66,6 +70,17 @@ object HelperMain {
             when (parts[1]) {
                 "hello" -> out.write("TDHELPER v=$VERSION uid=${Os.getuid()} pid=${Os.getpid()}\n".toByteArray())
                 "quit" -> { out.write("BYE\n".toByteArray()); out.flush(); exitProcess(0) }
+                "upgrade" -> {
+                    val apk = parts.getOrNull(2) ?: ""
+                    if (!apk.matches(Regex("/data/app/[A-Za-z0-9_.~=+/-]+/base\\.apk"))) { out.write("ERR apk\n".toByteArray()); return }
+                    out.write("UPGRADING\n".toByteArray()); out.flush()
+                    try { server?.close() } catch (_: Exception) {}       // free the port for the new helper
+                    ProcessBuilder("setsid", "sh", "-c", "sleep 1; CLASSPATH=$apk app_process /system/bin " +
+                        "${HelperMain::class.java.name} $token >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null")
+                        .redirectErrorStream(true).start()
+                    Thread.sleep(200)
+                    exitProcess(0)
+                }
                 "display" -> {
                     // display <w> <h> <dpi> <home 1|0>; the session owns the socket until the app closes it
                     sock.soTimeout = 0

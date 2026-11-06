@@ -700,8 +700,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     @Synchronized private fun startCar() {
         car?.let { if (it.status.startsWith("✗")) stopCar() else return }   // a failed attempt is retried
-        carMode = true
-        captureHandler.post { display?.surface = null }      // pause the phone mirror while the car screen runs
+        // carMode (and pausing the phone mirror) waits for the first car frame: if the helper is missing
+        // or fails, the car keeps seeing the phone instead of a frozen picture.
         val (w, h, d) = carSize()
         car = CarDisplay(this, this).also { it.start(w, h, d, true) }
         if (!screenOffRegistered) {
@@ -725,7 +725,11 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     }
 
     override fun onCarFrame(px: ByteArray, w: Int, h: Int) {
-        if (!carMode) return
+        if (car == null) return
+        if (!carMode) {           // first frame from the car screen: now switch over
+            carMode = true
+            captureHandler.post { display?.surface = null }   // pause the phone mirror while the car screen runs
+        }
         synchronized(lock) {
             var b = frame
             if (b == null || b.width != w || b.height != h) {
@@ -739,6 +743,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             stCaptured++
             lock.notifyAll()
         }
+    }
+
+    override fun onCarEnded(display: CarDisplay) {
+        if (car !== display) return
+        val st = display.status
+        stopCar()
+        carStatus = st
+        conn?.sendText("cd:" + st + " — показую телефон · showing the phone")
     }
 
     override fun onCarText(line: String) {

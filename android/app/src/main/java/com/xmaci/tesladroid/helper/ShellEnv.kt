@@ -24,6 +24,13 @@ object ShellEnv {
         val thread = ctor.newInstance()
         at.getDeclaredField("sCurrentActivityThread").apply { isAccessible = true }.set(null, thread)
         try { at.getDeclaredField("mSystemThread").apply { isAccessible = true }.setBoolean(thread, true) } catch (_: Throwable) {}
+        // Android 12+: getSystemContext() needs a ConfigurationController (as in scrcpy's Workarounds).
+        try {
+            val cc = Class.forName("android.app.ConfigurationController")
+            val ctl = cc.getDeclaredConstructor(Class.forName("android.app.ActivityThreadInternal"))
+                .apply { isAccessible = true }.newInstance(thread)
+            at.getDeclaredField("mConfigurationController").apply { isAccessible = true }.set(thread, ctl)
+        } catch (_: Throwable) {}
         val sys = at.getDeclaredMethod("getSystemContext").apply { isAccessible = true }.invoke(thread) as Context
         ShellContext(sys)
     }

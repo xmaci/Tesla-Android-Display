@@ -77,6 +77,8 @@ object Helper {
             "*) settings put secure enabled_accessibility_services \"\$S:$svc\" ;; esac; " +
             "settings put secure accessibility_enabled 1", 1500)
 
+        // A helper that hangs keeps the port and ignores "quit": kill every old copy first.
+        runShell(adb, "pkill -f tesladroid.helper.HelperMain; sleep 0.5", 1200)
         val apk = ctx.applicationInfo.sourceDir
         val launch = runShell(adb, "CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
             " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null & echo launched", 1500)

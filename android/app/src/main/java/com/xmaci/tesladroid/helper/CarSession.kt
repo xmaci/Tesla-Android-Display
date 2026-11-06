@@ -79,10 +79,16 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
 
     private fun create(): Boolean {
         HelperMain.log("display ${w}x$h@$dpi home=$deco: system context…")
-        try { ShellEnv.displayManager } catch (t: Throwable) {
-            val c = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
-            HelperMain.log("system context failed: $c")
-            text("ERR display: system context: ${c.javaClass.simpleName} ${c.message}")
+        // Built on another thread with a time limit: if Android's internals hang here, the helper
+        // reports it instead of hanging itself.
+        var err: Throwable? = null
+        val t = Thread { try { ShellEnv.displayManager } catch (e: Throwable) { err = e } }.apply { isDaemon = true; start() }
+        t.join(5000)
+        if (t.isAlive || err != null) {
+            val c = err?.let { (it as? java.lang.reflect.InvocationTargetException)?.targetException ?: it }
+            val why = if (c == null) "timeout (5 s)" else "${c.javaClass.simpleName} ${c.message}"
+            HelperMain.log("system context failed: $why")
+            text("ERR display: system context: $why")
             return false
         }
         HelperMain.log("display: creating")

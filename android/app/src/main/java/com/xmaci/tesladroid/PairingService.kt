@@ -78,6 +78,7 @@ class PairingService : Service() {
             try {
                 val ok = AdbManager.get(this).pair(h, p, code)
                 if (!ok) { update("Невірний код? Спробуйте ще · Wrong code? Try again", true); return@thread }
+                Config.setPaired(this, true)
                 state = "paired — starting helper"
                 update("Сполучено ✓ Запуск помічника… · Paired ✓ Starting helper…", false)
                 val result = Helper.start(this)

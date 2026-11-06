@@ -6,7 +6,13 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.system.OsConstants
@@ -34,6 +40,9 @@ class CarVpnService : VpnService() {
             private set
         @Volatile var lastError: String = ""
             private set
+        /** How many times the tunnels were re-created after a network change (diagnostics). */
+        @Volatile var rebuilds = 0
+            private set
         @Volatile private var instance: CarVpnService? = null
 
         fun start(ctx: Context) {
@@ -50,9 +59,56 @@ class CarVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null      // car address, e.g. 7.7.7.8
     private var tun2: ParcelFileDescriptor? = null     // helper tunnel that becomes the active VPN
 
+    private val main = Handler(Looper.getMainLooper())
+    private var netCb: ConnectivityManager.NetworkCallback? = null
+    private var ready = false        // ignore the callbacks fired right after registering
+
+    /** Re-creates both tunnels; posted with a delay so a burst of network events causes one rebuild. */
+    private val rebuild = Runnable {
+        if (!running && tun == null) return@Runnable
+        // A car that is streaming fine proves the link works; don't cut it for a harmless blip.
+        if (StreamService.carConnected && addressPresent(address)) return@Runnable
+        Log.i(TAG, "network changed — rebuilding car link")
+        rebuilds++
+        establish()
+    }
+
+    /** Every 10 s: if the car address vanished from all interfaces (the system dropped the tunnel), rebuild. */
+    private val health = object : Runnable {
+        override fun run() {
+            if (running && !addressPresent(address)) { Log.w(TAG, "car address missing — rebuilding"); rebuilds++; establish() }
+            main.postDelayed(this, 10_000)
+        }
+    }
+
+    private fun addressPresent(ip: String): Boolean = try {
+        java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().any { nif ->
+            nif.isUp && nif.inetAddresses.toList().any { it.hostAddress == ip }
+        }
+    } catch (_: Throwable) { true }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = changed()
+            override fun onLost(network: Network) = changed()
+        }
+        try {
+            // Only real networks (Wi‑Fi, mobile), not our own tunnels — rebuilding must not trigger itself.
+            cm.registerNetworkCallback(NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), cb)
+            netCb = cb
+        } catch (t: Throwable) { Log.w(TAG, "network callback", t) }
+        main.postDelayed({ ready = true }, 3000)
+        main.postDelayed(health, 10_000)
+    }
+
+    private fun changed() {
+        if (!ready) return
+        main.removeCallbacks(rebuild)
+        main.postDelayed(rebuild, 2000)
     }
 
     /**
@@ -67,6 +123,10 @@ class CarVpnService : VpnService() {
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        return if (establish()) START_STICKY else START_NOT_STICKY
+    }
+
+    private fun establish(): Boolean {
         val ip = Config.ip(this)
         try {
             shutdown()
@@ -90,7 +150,7 @@ class CarVpnService : VpnService() {
             if (tun == null && tun2 == null) {
                 lastError = "VPN permission not granted"
                 stopSelf()
-                return START_NOT_STICKY
+                return false
             }
             address = ip
             running = true
@@ -101,8 +161,9 @@ class CarVpnService : VpnService() {
             Log.e(TAG, "VPN establish failed", t)
             running = false
             stopSelf()
+            return false
         }
-        return START_STICKY
+        return true
     }
 
     fun shutdown() {
@@ -120,6 +181,9 @@ class CarVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        main.removeCallbacksAndMessages(null)
+        netCb?.let { try { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } catch (_: Throwable) {} }
+        netCb = null
         shutdown()
         instance = null
         super.onDestroy()

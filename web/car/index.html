@@ -54,7 +54,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.6.0</div>
+  <div id="ver">v0.8.0</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -128,10 +128,16 @@
   var mj = document.getElementById('mj'), mjOn = false;
   function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
   var frameW = 0, frameH = 0;
+  // 1:1 views show the frame unscaled, so only `area height` rows are ever visible: the phone sends just
+  // those (a third less to decode for a 432×960 frame in the ~650 px tall browser area).
+  var cropRows = 0;
 
   function sendCfg() {
-    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + set.f); }
+    if (ws && ws.readyState === 1) { ws.send('cfg:' + set.w + ':' + set.q + ':' + set.n + ':' + (isMj() ? 'm' : set.v === 'img' ? '0' : '1') + ':' + set.f + ':' + cropRows); }
   }
+  // Several setting changes in one tap (view + crop) send one cfg: each cfg makes the phone send a full frame.
+  var cfgPending = false;
+  function sendCfgSoon() { if (!cfgPending) { cfgPending = true; setTimeout(function () { cfgPending = false; sendCfg(); }, 0); } }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
   // One action per real tap. MCU1 delivers a tap as touchend + emulated click (sometimes late).
@@ -170,10 +176,10 @@
   function choose(key, val) {
     if (set[key] === val) { return; }
     set[key] = val; store(key === 'f' ? 'f3' : key, val); markOptions();
-    if (key === 'v') { layout(); }
+    if (key === 'v') { layout(); ensureLoadLoop(); }
     if (key === 's') { applyScaling(); return; }
     if (key === 'b') { tick(); return; }
-    sendCfg();
+    sendCfgSoon();
   }
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
   buildOptions('q', 'optQ', function (v) { return 'q' + v; });
@@ -199,6 +205,8 @@
     var sc = Math.min(aw / fw, ah / fh);
     var v = set.v, cw, ch, dispW, dispH, oldW = canvas.width, oldH = canvas.height;
     if (v === '1:1' || v === 'mj1:1') { sc = 1; }
+    var wantCrop = (v === '1:1' || v === 'mj1:1') ? Math.floor(ah) : 0;
+    if (wantCrop !== cropRows) { cropRows = wantCrop; sendCfgSoon(); }
     dispW = Math.floor(fw * sc); dispH = Math.floor(fh * sc);
     if (v === 'draw') { cw = dispW; ch = dispH; } else { cw = fw; ch = fh; }
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
@@ -494,7 +502,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.6.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.8.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -513,7 +521,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.6.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.8.0', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,
@@ -534,13 +542,15 @@
     var touch = server.touch === false ? 'touch OFF' :
       ('touch ' + touchSent + '→' + touchOk + (touchFail ? ' ✗' + touchFail : '') + (touchNoSvc ? ' no-svc' + touchNoSvc : ''));
     var fps = isMj() ? (server.fps || 0) : Math.round(localFps * 10) / 10;
-    statsEl.innerHTML = fps + ' fps · ' + (isMj() ? 'wait ' : '') + (server.lat || 0) + ' ms · ' +
+    var html = fps + ' fps · ' + (isMj() ? 'wait ' : '') + (server.lat || 0) + ' ms · ' +
       (server.kb || 0) + ' KB · upd ' + (server.area || 0) + '% · ' + (server.w || frameW) + '×' + (server.h || frameH) +
       ' · ' + set.v + (isMj() && server.pace ? ' · pace ' + server.pace + ' lag ' + (server.lag || 0) : '') +
       (!isMj() && server.mjs ? ' · ⚠ mjpeg still open' : '') + (isMj() ? ' · pic ' + picState + (mjRestarts ? ' ↻' + mjRestarts : '') : '') + '<br>' +
       'enc ' + (server.enc || 0) + ' · net ' + (server.net || 0) + ' · wait ' + (server.wait || 0) +
       ' · dec ' + (server.dec || 0) + ' · draw ' + (server.draw || 0) + ' ms · ' + touch;
+    if (html !== lastStatsHtml) { lastStatsHtml = html; statsEl.innerHTML = html; }   // no relayout when unchanged
   }
+  var lastStatsHtml = '';
 
   // ---- touch on the picture ----
   var lastMove = 0, lastTouchT = 0, touching = false;
@@ -615,8 +625,10 @@
 
   // ---- load report: how late a 100 ms timer fires = how busy the page is (MJPEG decode/paint, GC).
   // Sent every second; the phone lowers the MJPEG rate when the car falls behind (Max fps = Auto).
-  var loadMax = 0, loadSent = now();
-  (function loadLoop() {
+  var loadMax = 0, loadSent = now(), loadOn = false;
+  function loadLoop() {
+    if (!isMj()) { loadOn = false; return; }
+    loadOn = true;
     var expect = now() + 100;
     setTimeout(function () {
       var t = now(), late = t - expect;
@@ -627,7 +639,9 @@
       }
       loadLoop();
     }, 100);
-  })();
+  }
+  function ensureLoadLoop() { if (isMj() && !loadOn) { loadMax = 0; loadSent = now(); loadLoop(); } }
+  ensureLoadLoop();
 
   // ---- full screen: try every API old and new WebKit had; report which one exists and what happened ----
   function tryFull() {
@@ -682,7 +696,7 @@
   setInterval(checkMj, 1300);
   onTap(document.getElementById('bRe'), function () { if (isMj()) { restartMj(); } else { askFull(); } }, 1000);
 
-  setInterval(showStats, 1000);
+  setInterval(function () { if (!ws || ws.readyState !== 1) { showStats(); } }, 1000);   // phone stats drive it while connected
   connect();
   if (param('prof')) { setTimeout(profStart, 4000); }
 })();

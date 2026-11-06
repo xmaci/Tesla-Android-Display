@@ -49,7 +49,9 @@ object Helper {
             if (!adb.isConnected && !adb.connectTls(ctx, 10_000)) {
                 return "no Wireless debugging found (turn it on, phone must be on Wi‑Fi)"
             }
+            Config.setPaired(ctx, true)
         } catch (_: AdbPairingRequiredException) {
+            Config.setPaired(ctx, false)
             return "not paired yet — use Pair first"
         } catch (e: Exception) {
             return "adb connect failed: ${e.message}"

@@ -26,6 +26,14 @@ object Config {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("ip", ip.trim()).apply()
     }
 
+    /** Set once Wireless debugging pairing succeeded; cleared if adbd asks to pair again. */
+    fun paired(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("paired", false)
+
+    fun setPaired(ctx: Context, v: Boolean) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("paired", v).apply()
+    }
+
     fun carUrl(ip: String, port: Int): String = "http://$ip.sslip.io:$port/"
 
     fun isValidIpv4(s: String): Boolean {

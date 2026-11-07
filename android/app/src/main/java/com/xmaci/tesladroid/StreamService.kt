@@ -80,7 +80,12 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         const val CAR_HOME = "com.xmaci.tesladroid/com.xmaci.tesladroid.CarHomeActivity"
 
         /** From the car-screen home (CarHomeActivity): open [component] on the car screen. */
-        fun launchOnCar(component: String) { self?.let { it.carLaunch = component; it.car?.launch(component) } }
+        fun launchOnCar(component: String) {
+            self?.let { it.carLaunch = component; it.car?.launch(component); CarApps.addRecent(it, component); it.panelChanged() }
+        }
+
+        /** Car-screen home: long press pins/unpins an app on the car panel. */
+        fun favouritesChanged() { self?.panelChanged() }
         /** Last 5 s profile from the car: one-line summary + where the JSON was saved. */
         @Volatile var lastProfile = ""
             private set
@@ -493,6 +498,15 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
      */
     override fun onHttp(path: String, sock: java.net.Socket, out: java.io.OutputStream): Boolean {
         if (path == "/apps") { sendApps(out); return true }
+        if (path == "/panel") { sendBody(out, CarApps.panelJson(this).toByteArray(Charsets.UTF_8), "application/json; charset=utf-8"); return true }
+        if (path.startsWith("/icon/")) {
+            // /icon/<pkg>/<cls>: app icon, 96 px PNG
+            val c = path.removePrefix("/icon/")
+            val png = if (c.matches(Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+"))) CarApps.iconPng(this, c, 96) else null
+            if (png == null) { out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); out.flush() }
+            else sendBody(out, png, "image/png", "max-age=86400")
+            return true
+        }
         if (path != "/mjpeg") return false
         val gen = ++mjpegGen
         val startedAt = SystemClock.uptimeMillis()
@@ -574,6 +588,15 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         }
         return true
     }
+
+    private fun sendBody(out: java.io.OutputStream, body: ByteArray, type: String, cache: String = "no-store") {
+        out.write(("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${body.size}\r\n" +
+            "Cache-Control: $cache\r\nConnection: close\r\n\r\n").toByteArray())
+        out.write(body); out.flush()
+    }
+
+    /** Favourites or recents changed: the car page reloads its panel. */
+    private fun panelChanged() { conn?.sendText("pn") }
 
     /** GET /apps -> [{"n":"Maps","c":"pkg/cls"}, …]: apps that can be opened on the car screen. */
     private fun sendApps(out: java.io.OutputStream) {
@@ -661,7 +684,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                     car?.resize(w, h, d)
                 }
             }
-            "launch" -> { val c = text.substring(7).trim(); carLaunch = c; car?.launch(c) }
+            "launch" -> {
+                val c = text.substring(7).trim(); carLaunch = c; car?.launch(c)
+                CarApps.addRecent(this, c); panelChanged()
+            }
         }
     }
 

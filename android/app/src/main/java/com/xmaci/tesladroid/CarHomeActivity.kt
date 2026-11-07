@@ -42,6 +42,18 @@ class CarHomeActivity : Activity() {
             setPadding(dp(16), dp(20), dp(16), dp(20))
             clipToPadding = false
             setOnItemClickListener { _, _, pos, _ -> apps.getOrNull(pos)?.let { StreamService.launchOnCar(it.component) } }
+            // Long press: pin to / unpin from the car panel
+            setOnItemLongClickListener { _, _, pos, _ ->
+                apps.getOrNull(pos)?.let {
+                    val on = CarApps.toggleFavourite(this@CarHomeActivity, it.component)
+                    android.widget.Toast.makeText(this@CarHomeActivity,
+                        if (on) "★ ${it.label} — на панелі · pinned" else "${it.label} — знято з панелі · unpinned",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                    StreamService.favouritesChanged()
+                    (adapter as? BaseAdapter)?.notifyDataSetChanged()
+                }
+                true
+            }
         }
         setContentView(grid)
 
@@ -73,7 +85,8 @@ class CarHomeActivity : Activity() {
             }
             val a = apps[p]
             (box.getChildAt(0) as ImageView).setImageDrawable(a.icon)
-            (box.getChildAt(1) as TextView).text = a.label
+            (box.getChildAt(1) as TextView).text =
+                if (CarApps.isFavourite(this@CarHomeActivity, a.component)) "★ ${a.label}" else a.label
             return box
         }
     }

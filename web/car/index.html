@@ -42,6 +42,24 @@
   #panel button { font-size: 22px; min-width: 96px; height: 54px; margin: 0 8px 8px 0; background: #2b2b2b; color: #eee; border: 2px solid #2b2b2b; border-radius: 8px; }
   #panel button.on { background: #2a6fdb; border-color: #8fb4ff; }
   #panel .hint { font-size: 15px; color: #888; }
+  /* Car panel (dock): favourites, recents, back / all apps / settings. Drawn by this page, so it stays
+     usable while the phone is locked. */
+  .dk { position: absolute; display: none; background: #1a1c20; overflow: hidden; z-index: 2; }
+  .dk.side { width: 88px; display: none; flex-direction: column; align-items: center; padding: 8px 0; box-sizing: border-box; }
+  .dk.flat { height: 84px; display: none; flex-direction: row; align-items: center; padding: 0 8px; box-sizing: border-box; }
+  .dk button { flex-shrink: 0; border: 0; border-radius: 14px; background: #262a30; color: #e8eaed; padding: 0; margin: 3px; font-size: 26px; }
+  .dk.side button { width: 60px; height: 52px; }
+  .dk.flat button { width: 60px; height: 60px; }
+  .dk button.app { background: transparent; width: 64px; height: 64px; }
+  .dk button.app img { width: 54px; height: 54px; display: block; margin: 0 auto; }
+  .dk .st { flex-shrink: 0; text-align: center; color: #e8eaed; padding: 4px 6px; }
+  .dk .tm { font-size: 22px; font-weight: bold; }
+  .dk .bt { font-size: 13px; color: #a6abb3; }
+  .dk .sep { flex-shrink: 0; font-size: 12px; color: #8a9099; padding: 6px; text-transform: uppercase; }
+  /* apps take what is left and are cut off at the end; the controls always stay visible */
+  .dk .apps { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; align-items: center; }
+  .dk.side .apps { flex-direction: column; }
+  .dk.flat .apps { flex-direction: row; }
   #appList { max-height: 300px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   #appList button { min-width: 180px; font-size: 19px; }
 </style>
@@ -56,9 +74,10 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.9.9</div>
+  <div id="ver">v0.10.0</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
+<div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
 <div id="prof"></div>
 <div id="msg">Підключення… · Connecting…</div>
 <div id="panel">
@@ -68,6 +87,11 @@
     <div class="hint">Весь = розмір браузера, найчіткіше (Intel) · Full = browser size, sharpest (Intel) · MCU1: 640×720</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Масштаб · Scale</div><div id="optY"></div>
     <div class="hint">розмір іконок і тексту в програмах · size of icons and text in apps</div></div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Панель · Panel</div><div id="optP"></div>
+    <div class="hint">дві = улюблені + останні окремо · two = favourites and recents apart · ★ закріпити: довге натискання на екрані програм · pin: long press on the apps screen</div></div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Позиція панелі · Panel position</div><div id="optO"></div>
+    <div class="hint" id="posHint"></div></div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Верхній рядок (↻, 5s, статистика) · Top bar</div><div id="optT"></div></div>
   <div class="row carOnly" id="appsRow" style="display:none"><div class="lbl">Програми · Apps</div>
     <button id="bApps">Показати · Show</button><div id="appList"></div></div>
   <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div>
@@ -122,7 +146,10 @@
     b: ['0', '1', '2', 'a'],
     d: ['phone', 'car'],
     z: ['full', '640x720', '800x480', '1024x600'],
-    y: ['s', 'm', 'l']
+    y: ['s', 'm', 'l'],
+    p: ['one', 'two', 'off'],
+    o: ['auto', 'bottom', 'left', 'right'],
+    t: ['auto', 'on']
   };
   // Defaults by car: MCU1 (QtCarBrowser, Tegra) is slow → small MJPEG; Intel/Ryzen (Chromium) measured
   // 35–50 fps in gpu / 1:1 / fit → canvas view at a larger size. Saved choices always win.
@@ -137,7 +164,10 @@
     b: param('buf') || load('b', '0'),          // frame buffer in canvas views: 0 off, 1, 2, a = auto
     d: param('screen') || load('d', 'phone'),   // phone = mirror the phone, car = car-shaped screen of its own
     z: load('z', mcu1 ? '640x720' : 'full'),     // car screen size: full = browser area 1:1
-    y: load('y', 'm')                           // car screen scale (icons/text)
+    y: load('y', 'm'),                          // car screen scale (icons/text)
+    p: load('p', 'one'),                        // car panel: one, two (favourites / recents apart), off
+    o: load('o', 'auto'),                       // panel position: auto = bottom on a squarish/tall browser, else left
+    t: load('t', 'auto')                        // top bar: auto = hidden while the car panel is shown
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -185,8 +215,10 @@
   }
   function sendMode() {
     if (!ws || ws.readyState !== 1) { return; }
-    vpSent = ''; csSent = ''; sendVp(); sendCs(); ws.send('mode:' + set.d);
-    carRows();
+    vpSent = ''; csSent = '';
+    carRows(); applyDock();          // layout() inside sends vp / cs
+    sendVp(); sendCs(); ws.send('mode:' + set.d);
+    if (set.d === 'car') { loadPanel(); }
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
@@ -231,6 +263,7 @@
     if (key === 'b') { tick(); return; }
     if (key === 'd') { sendMode(); return; }
     if (key === 'z' || key === 'y') { sendCs(); return; }
+    if (key === 'p' || key === 'o' || key === 't') { applyDock(); return; }
     sendCfgSoon();
   }
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
@@ -243,7 +276,105 @@
   buildOptions('d', 'optD', function (v) { return v === 'car' ? 'Авто · Car' : 'Телефон · Phone'; });
   buildOptions('z', 'optZ', function (v) { return v === 'full' ? 'Весь · Full' : v.replace('x', '×'); });
   buildOptions('y', 'optY', function (v) { return v.toUpperCase(); });
+  buildOptions('p', 'optP', function (v) { return v === 'one' ? 'Одна · One' : v === 'two' ? 'Дві · Two' : 'Вимк · Off'; });
+  buildOptions('o', 'optO', function (v) { return { auto: 'Авто', bottom: 'Знизу · Bottom', left: 'Зліва · Left', right: 'Справа · Right' }[v]; });
+  buildOptions('t', 'optT', function (v) { return v === 'on' ? 'Показувати · Show' : 'Авто · Auto'; });
   carRows();
+
+  // ---- car panel (dock) ----
+  var panelData = null;
+  function esc(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
+  function dockPos() {
+    if (set.o !== 'auto') { return set.o; }
+    // Old Model S/X (MCU1/MCU2, tall screen): the browser is squarish or tall → bottom.
+    // Model 3/Y and S/X from 2021 (wide screen) → side.
+    return window.innerWidth < window.innerHeight * 1.35 ? 'bottom' : 'left';
+  }
+  function dockSide(el, side, top) {
+    var st = el.style;
+    el.className = 'dk ' + (side === 'bottom' || side === 'top' ? 'flat' : 'side');
+    st.display = 'flex';
+    st.left = side === 'right' ? 'auto' : '0'; st.right = side === 'left' ? 'auto' : '0';
+    st.top = side === 'bottom' ? 'auto' : top + 'px'; st.bottom = side === 'top' ? 'auto' : '0';
+    st.width = ''; st.height = '';
+  }
+  function appBtn(a) {
+    return '<button class="app" data-c="' + esc(a.c) + '"><img src="/icon/' + esc(a.c) + '" alt="' + esc(a.n) + '"></button>';
+  }
+  function dockStatus() {
+    var d = new Date(), m = d.getMinutes(), pd = panelData || {};
+    var bat = pd.bat >= 0 ? pd.bat + '%' + (pd.chg ? '+' : '') : '';
+    return '<div class="st"><div class="tm">' + d.getHours() + ':' + (m < 10 ? '0' : '') + m + '</div>' +
+      '<div class="bt">' + esc(bat + (bat && pd.net ? ' · ' : '') + (pd.net || '')) + '</div></div>';
+  }
+  function dockHtml(part) {
+    var pd = panelData || { fav: [], rec: [] }, h = '', i;
+    if (part !== 'rec') { h += dockStatus(); }
+    h += '<div class="apps">';
+    if (part !== 'rec') {
+      for (i = 0; i < pd.fav.length; i++) { h += appBtn(pd.fav[i]); }
+    }
+    if (part !== 'fav' && pd.rec.length) {
+      h += '<div class="sep">Останні</div>';
+      for (i = 0; i < pd.rec.length; i++) { h += appBtn(pd.rec[i]); }
+    }
+    h += '</div>';
+    if (part !== 'rec') {
+      h += '<button data-k="back">◀</button><button data-k="home">▦</button><button data-k="set">⚙</button>';
+    }
+    return h;
+  }
+  function applyDock() {
+    var dock = document.getElementById('dock'), dock2 = document.getElementById('dock2');
+    var on = set.d === 'car' && set.p !== 'off', showBar = !on || set.t === 'on';
+    var top = showBar ? 65 : 0, l = 0, r = 0, b = 0, t2 = top, side = dockPos(), D;
+    document.getElementById('bar').style.display = showBar ? '' : 'none';
+    dock.style.display = 'none'; dock2.style.display = 'none';
+    document.getElementById('posHint').innerHTML = 'Авто → ' + (dockPos() === 'bottom' ? 'знизу' : 'збоку') +
+      ' (' + window.innerWidth + '×' + window.innerHeight + ')';
+    if (on) {
+      D = side === 'bottom' ? 84 : 88;
+      dock.innerHTML = dockHtml(set.p === 'two' ? 'fav' : 'all');
+      dockSide(dock, side, top);
+      if (side === 'bottom') { b = D; } else if (side === 'left') { l = D; } else { r = D; }
+      if (set.p === 'two') {
+        var other = side === 'bottom' ? 'top' : side === 'left' ? 'right' : 'left';
+        dock2.innerHTML = dockHtml('rec');
+        dockSide(dock2, other, top);
+        if (other === 'top') { t2 = top + D; } else if (other === 'left') { l = D; } else { r = D; }
+      }
+    }
+    wrap.style.top = t2 + 'px'; wrap.style.left = l + 'px'; wrap.style.right = r + 'px'; wrap.style.bottom = b + 'px';
+    layout();
+  }
+  function loadPanel() {
+    var x = new XMLHttpRequest();
+    x.open('GET', '/panel?t=' + new Date().getTime(), true);
+    x.onload = function () {
+      try { panelData = JSON.parse(x.responseText); } catch (e) { return; }
+      if (set.d === 'car') { applyDock(); }
+    };
+    x.send();
+  }
+  var dockLast = 0;
+  function dockTap(e) {
+    var el = e.target;
+    while (el && el.tagName !== 'BUTTON' && el.className.indexOf('dk') < 0) { el = el.parentNode; }
+    if (!el || el.tagName !== 'BUTTON') { return; }
+    e.preventDefault();
+    var n = now(); if (n - dockLast < 400) { return; } dockLast = n;
+    var c = el.getAttribute('data-c'), k = el.getAttribute('data-k');
+    if (c) { if (ws && ws.readyState === 1) { ws.send('launch:' + c); } }
+    else if (k === 'set') { showPanel(!panelOpen); }
+    else if (k && ws && ws.readyState === 1) { ws.send('k:' + k); }
+  }
+  for (var di = 0; di < 2; di++) {
+    var dEl = document.getElementById(di ? 'dock2' : 'dock');
+    dEl.addEventListener('touchend', dockTap, false);
+    dEl.addEventListener('click', dockTap, false);
+  }
+  // Clock and phone battery: refresh twice a minute (cheap: one small repaint).
+  setInterval(function () { if (set.d === 'car' && set.p !== 'off') { loadPanel(); } }, 30000);
 
   // App list for the car screen (GET /apps from the phone).
   function loadApps() {
@@ -322,8 +453,8 @@
     // A resized canvas is blank: ask the phone for a complete frame.
     if (!isMj() && (canvas.width !== oldW || canvas.height !== oldH || v === 'img')) { askFull(); }
   }
-  window.onresize = layout;
-  layout();
+  window.onresize = function () { applyDock(); };
+  applyDock();
 
   // ---- connection ----
   function connect() {
@@ -365,6 +496,7 @@
         if (set.d === 'car' && server.cd !== undefined && panelOpen) { document.getElementById('carRes').innerHTML = (server.cd || '…').replace(/</g, '&lt;'); }
         showStats();
       }
+      else if (d === 'pn') { loadPanel(); }
       else if (d.indexOf('cd:') === 0) { document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('ti:') === 0) {
         var r = d.substr(3);
@@ -587,7 +719,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.9.9 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.10.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',

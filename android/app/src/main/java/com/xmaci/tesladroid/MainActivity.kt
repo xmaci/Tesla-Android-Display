@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.10.3"
+        const val VERSION = "0.10.4"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -292,7 +292,9 @@ class MainActivity : Activity() {
 
     private fun refreshAdvanced() {
         Thread { helperLine = Helper.ping(this) }.start()
-        pairBtn.visibility = if (Config.paired(this)) View.GONE else View.VISIBLE
+        // Always available: turning Developer options off forgets the pairing without the app knowing.
+        (pairBtn as? android.widget.Button)?.text = if (Config.paired(this))
+            "Сполучити знову · Pair again (Wireless debugging)" else "Сполучити · Pair (Wireless debugging)"
         helperStatus.text = (if (Config.paired(this)) "✅ сполучено · paired\n" else "") + (if (helperLine != null) "✅ $helperLine" else "❌ не запущено · not running") +
             (if (PairingService.state.isNotEmpty()) "\npairing: ${PairingService.state}" else "") +
             (if (helperMsg.isNotEmpty()) "\n$helperMsg" else "")

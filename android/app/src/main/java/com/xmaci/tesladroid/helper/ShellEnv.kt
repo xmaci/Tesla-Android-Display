@@ -64,6 +64,23 @@ object ShellEnv {
         InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
     }
 
+    /**
+     * Keyboard on [displayId] instead of the phone (scrcpy --display-ime-policy=local).
+     * Android 12+: setDisplayImePolicy(id, 0 = LOCAL); Android 10–11: setShouldShowIme(id, true).
+     */
+    fun imeLocal(displayId: Int): String = try {
+        val b = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, "window") as android.os.IBinder
+        val wm = Class.forName("android.view.IWindowManager\$Stub").getMethod("asInterface", android.os.IBinder::class.java).invoke(null, b)!!
+        if (android.os.Build.VERSION.SDK_INT >= 31)
+            wm.javaClass.getMethod("setDisplayImePolicy", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(wm, displayId, 0)
+        else
+            wm.javaClass.getMethod("setShouldShowIme", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType).invoke(wm, displayId, true)
+        "keyboard here"
+    } catch (e: Throwable) {
+        val c = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+        "keyboard: ${c.javaClass.simpleName} ${c.message}"
+    }
+
     /** Sends [ev] to [displayId]. Mode 0 = async (don't wait for the app to handle it). */
     fun inject(ev: InputEvent, displayId: Int): Boolean {
         setDisplayId.invoke(ev, displayId)

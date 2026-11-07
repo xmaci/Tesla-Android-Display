@@ -117,7 +117,9 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
                 fail?.let { throw it }
                 val vd = made ?: throw IllegalStateException("null display")
                 display = vd; reader = r; displayId = vd.display.displayId
-                text("OK $displayId $name ${w}x$h@$dpi")
+                val ime = ShellEnv.imeLocal(displayId)
+                HelperMain.log("display $displayId ($name), $ime")
+                text("OK $displayId $name ${w}x$h@$dpi, $ime")
                 return true
             } catch (t: Throwable) {
                 errors.append(name).append(": ").append(t.javaClass.simpleName).append(' ').append(t.message).append("; ")

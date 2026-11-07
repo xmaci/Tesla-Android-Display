@@ -47,6 +47,7 @@ import java.nio.ByteOrder
  *                 "k:<back|home|recents|notifications>"
  *                 "mode:<phone|car>"         mirror the phone, or a car-shaped screen of its own (helper needed)
  *                 "vp:<w>:<h>"               car browser area in CSS px (shape of the car screen)
+ *                 "cs:<w>:<h>:<dpi>"         car screen size and density chosen on the car page
  *                 "launch:<pkg/cls>"         open an app on the car screen
  *   phone -> car  binary: 20-byte header (seq u32, frame w,h u16, encMs u16, q u16, rect x,y,w,h u16) + JPEG
  *                 of that rectangle only (partial update) or of the whole frame
@@ -172,6 +173,9 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     @Volatile private var car: CarDisplay? = null
     @Volatile private var vpW = 0
     @Volatile private var vpH = 0
+    @Volatile private var csW = 0
+    @Volatile private var csH = 0
+    @Volatile private var csDpi = 0
     @Volatile private var carLaunch = ""
 
     private fun sendH(fh: Int): Int = if (carMode) fh else if (cropReq in 64 until fh) (cropReq / 2) * 2 else fh
@@ -649,6 +653,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
                 if (w >= 100 && h >= 100 && (w != vpW || h != vpH)) { vpW = w; vpH = h; if (carMode) resize(wantWidth) }
             }
+            "cs" -> {
+                val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
+                val d = p.getOrNull(3)?.toIntOrNull() ?: 0
+                if (w in 160..2560 && h in 160..2560 && d in 80..640 && (w != csW || h != csH || d != csDpi)) {
+                    csW = w; csH = h; csDpi = d
+                    car?.resize(w, h, d)
+                }
+            }
             "launch" -> { val c = text.substring(7).trim(); carLaunch = c; car?.launch(c) }
         }
     }
@@ -679,6 +691,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     /** Car screen size: the car's frame width, the shape of its browser area (800×480 until it reports). */
     private fun carSize(): Triple<Int, Int, Int> {
+        if (csW > 0) return Triple(csW, csH, csDpi)      // chosen on the car page (⚙ → Screen size / Scale)
         // At least 640 px: MCU1's default 320 would give an unusable ~320×190 screen; 640×370 is still
         // fewer pixels than the 432×960 phone frame MCU1 already handles.
         val w = (wantWidth.coerceIn(640, 1280) / 2) * 2

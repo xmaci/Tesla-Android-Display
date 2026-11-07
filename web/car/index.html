@@ -56,7 +56,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.9.8</div>
+  <div id="ver">v0.9.9</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="prof"></div>
@@ -64,7 +64,11 @@
 <div id="panel">
   <div class="row"><div class="lbl">Екран · Screen</div><div id="optD"></div>
     <div class="hint" id="carRes">Авто = окремий екран у формі авто, телефон можна заблокувати (потрібен помічник) · Car = its own car-shaped screen, the phone can stay locked (needs the helper)</div></div>
-  <div class="row" id="appsRow" style="display:none"><div class="lbl">Програми · Apps</div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Розмір екрана «Авто» · Car screen size</div><div id="optZ"></div>
+    <div class="hint">Весь = розмір браузера, найчіткіше (Intel) · Full = browser size, sharpest (Intel) · MCU1: 640×720</div></div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Масштаб · Scale</div><div id="optY"></div>
+    <div class="hint">розмір іконок і тексту в програмах · size of icons and text in apps</div></div>
+  <div class="row carOnly" id="appsRow" style="display:none"><div class="lbl">Програми · Apps</div>
     <button id="bApps">Показати · Show</button><div id="appList"></div></div>
   <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div>
     <div class="hint">телефон горизонтально → 640–800 · phone in landscape → 640–800</div></div>
@@ -116,7 +120,9 @@
     s: ['fast', 'smooth'],
     f: ['a', '5', '10', '15', '20', '30', '0'],
     b: ['0', '1', '2', 'a'],
-    d: ['phone', 'car']
+    d: ['phone', 'car'],
+    z: ['full', '640x720', '800x480', '1024x600'],
+    y: ['s', 'm', 'l']
   };
   // Defaults by car: MCU1 (QtCarBrowser, Tegra) is slow → small MJPEG; Intel/Ryzen (Chromium) measured
   // 35–50 fps in gpu / 1:1 / fit → canvas view at a larger size. Saved choices always win.
@@ -129,7 +135,9 @@
     s: param('scale') || load('s', 'fast'),     // picture scaling: fast (nearest neighbour) or smooth
     f: param('fps') || load('f3', '15'),         // MJPEG frame cap; 0 = none, a = follow the car's load
     b: param('buf') || load('b', '0'),          // frame buffer in canvas views: 0 off, 1, 2, a = auto
-    d: param('screen') || load('d', 'phone')    // phone = mirror the phone, car = car-shaped screen of its own
+    d: param('screen') || load('d', 'phone'),   // phone = mirror the phone, car = car-shaped screen of its own
+    z: load('z', mcu1 ? '640x720' : 'full'),     // car screen size: full = browser area 1:1
+    y: load('y', 'm')                           // car screen scale (icons/text)
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -152,10 +160,33 @@
     var v = 'vp:' + wrap.clientWidth + ':' + wrap.clientHeight;
     if (ws && ws.readyState === 1 && v !== vpSent) { vpSent = v; ws.send(v); }
   }
+  // Size and density of the car screen. Density keeps icons/text the same size on the car's
+  // display whatever the frame size: 1 dp ≈ k CSS px after the frame is fitted to this area.
+  function carScreen() {
+    var vw = wrap.clientWidth || 800, vh = wrap.clientHeight || 480, dpr = window.devicePixelRatio || 1, w, h;
+    if (set.z === 'full') {
+      var f = Math.min(1, 1600 / (vw * dpr), 1600 / (vh * dpr));
+      w = Math.round(vw * dpr * f); h = Math.round(vh * dpr * f);
+    } else { var p = set.z.split('x'); w = +p[0]; h = +p[1]; }
+    w -= w % 2; h -= h % 2;
+    var k = set.y === 's' ? 1.2 : set.y === 'l' ? 1.9 : 1.5;
+    var shown = Math.min(vw / w, vh / h);
+    var dpi = Math.max(90, Math.min(480, Math.round(160 * k / shown)));
+    return w + ':' + h + ':' + dpi;
+  }
+  var csSent = '';
+  function sendCs() {
+    var c = 'cs:' + carScreen();
+    if (ws && ws.readyState === 1 && c !== csSent) { csSent = c; ws.send(c); }
+  }
+  function carRows() {
+    var rows = document.querySelectorAll('.carOnly');
+    for (var i = 0; i < rows.length; i++) { rows[i].style.display = set.d === 'car' ? 'block' : 'none'; }
+  }
   function sendMode() {
     if (!ws || ws.readyState !== 1) { return; }
-    vpSent = ''; sendVp(); ws.send('mode:' + set.d);
-    document.getElementById('appsRow').style.display = set.d === 'car' ? 'block' : 'none';
+    vpSent = ''; csSent = ''; sendVp(); sendCs(); ws.send('mode:' + set.d);
+    carRows();
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
@@ -199,6 +230,7 @@
     if (key === 's') { applyScaling(); return; }
     if (key === 'b') { tick(); return; }
     if (key === 'd') { sendMode(); return; }
+    if (key === 'z' || key === 'y') { sendCs(); return; }
     sendCfgSoon();
   }
   buildOptions('w', 'optW', function (v) { return v + 'px'; });
@@ -209,7 +241,9 @@
   buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v === 'a' ? 'Auto' : v; });
   buildOptions('b', 'optB', function (v) { return v === '0' ? 'Off' : v === 'a' ? 'Auto' : v; });
   buildOptions('d', 'optD', function (v) { return v === 'car' ? 'Авто · Car' : 'Телефон · Phone'; });
-  document.getElementById('appsRow').style.display = set.d === 'car' ? 'block' : 'none';
+  buildOptions('z', 'optZ', function (v) { return v === 'full' ? 'Весь · Full' : v.replace('x', '×'); });
+  buildOptions('y', 'optY', function (v) { return v.toUpperCase(); });
+  carRows();
 
   // App list for the car screen (GET /apps from the phone).
   function loadApps() {
@@ -284,7 +318,7 @@
       s.style.left = left + 'px'; s.style.top = top + 'px';
       if (v !== 'img') { s.style.display = 'none'; }
     }
-    sendVp();
+    sendVp(); if (set.z === 'full') { sendCs(); }
     // A resized canvas is blank: ask the phone for a complete frame.
     if (!isMj() && (canvas.width !== oldW || canvas.height !== oldH || v === 'img')) { askFull(); }
   }
@@ -553,7 +587,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.9.8 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.9.9 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -572,7 +606,7 @@
     profEl.appendChild(document.createTextNode(lines.join('\n')));
     profEl.style.display = 'block';
     profBtn.innerHTML = '5s';
-    var payload = { v: '0.9.8', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
+    var payload = { v: '0.9.9', ua: navigator.userAgent, view: set.v, w: server.w || frameW, h: server.h || frameH,
                     q: +set.q, n: +set.n, buf: set.b, scale: set.s, maxFps: set.f === 'a' ? 'auto' : +set.f, secs: Math.round(secs * 10) / 10,
                     fps: fps, stats: S, stalls: stalls, verdict: verdict, server0: p.srv0, server1: JSON.stringify(server),
                     mj: mj ? { samples: p.mjSamples, changes: p.mjChanges, costMs: Math.round(p.mjCost) } : null,

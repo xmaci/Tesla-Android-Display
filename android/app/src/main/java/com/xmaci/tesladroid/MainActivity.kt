@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.11.0"
+        const val VERSION = "0.11.1"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -63,6 +63,8 @@ class MainActivity : Activity() {
     private lateinit var ipField: EditText
     private lateinit var helperStatus: TextView
     private lateinit var pairBtn: View
+    private lateinit var helperBox: LinearLayout
+    private var helperForceOpen = false
     private lateinit var diag: TextView
     @Volatile private var helperMsg = ""
     @Volatile private var helperLine: String? = null
@@ -97,6 +99,35 @@ class MainActivity : Activity() {
 
         text(col, "TeslaDroid", 26f, true, center = true)
         text(col, "Екран телефона на Tesla · Phone screen on the Tesla", 13f, color = GREY, center = true)
+
+        // ---- step 1: the helper (once; afterwards it starts itself on Wi‑Fi) ----
+        val helperCard = card()
+        text(helperCard, "Крок 1 · Помічник · Step 1 · Helper", 16f, true)
+        helperStatus = text(helperCard, "", 14f)
+        helperBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        helperCard.addView(helperBox)
+        text(helperBox, "Один раз, вдома на Wi‑Fi (роздачу вимкнути):\n" +
+            "1) Параметри розробника → Бездротове налагодження: увімкнути, «Завжди дозволяти в цій мережі».\n" +
+            "2) «Сполучити» → «Сполучити пристрій за допомогою коду» → 6 цифр у сповіщення TeslaDroid.\n" +
+            "3) «Запустити помічника». Далі він запускається сам після кожного перезавантаження, коли телефон на Wi‑Fi.\n" +
+            "Once, at home on Wi‑Fi (hotspot off): Developer options → Wireless debugging on (always allow on this network) → " +
+            "Pair (6 digits into the TeslaDroid notification) → Start helper. Then it restarts itself on Wi‑Fi after every reboot.",
+            12f, color = GREY)
+        button(helperBox, "Параметри розробника · Developer options") {
+            try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
+            catch (_: Exception) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
+        }
+        pairBtn = button(helperBox, "Сполучити · Pair (Wireless debugging)") {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
+            }
+            PairingService.start(this)
+            try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
+            catch (_: Exception) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
+        }
+        button(helperBox, "Запустити помічника · Start helper") { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
+        // Tap the status to show the steps again even when everything works.
+        helperStatus.setOnClickListener { helperForceOpen = !helperForceOpen }
 
         // ---- the big start / stop button ----
         bigButton = ImageView(this).apply {
@@ -154,20 +185,6 @@ class MainActivity : Activity() {
         advanced.addView(ipField)
         text(advanced, "Не приватна IP. Типово 7.7.7.8. · Must not be a private IP. Default 7.7.7.8.", 12f, color = GREY)
 
-        text(advanced, "Помічник (для екрана «Авто») · Helper (for the «Car» screen)", 15f, true)
-        text(advanced, "Запускати вдома: потрібні «Параметри розробника» і Wi‑Fi; далі працює до перезавантаження телефона. " +
-            "У Tesla: ⚙ → Екран → Авто. · Start it at home: needs Developer options and Wi‑Fi; then it runs until the phone reboots. " +
-            "In the Tesla: ⚙ → Screen → Car.", 12f, color = GREY)
-        helperStatus = text(advanced, "", 13f)
-        pairBtn = button(advanced, "Сполучити · Pair (Wireless debugging)") {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
-            }
-            PairingService.start(this)
-            try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
-            catch (_: Exception) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
-        }
-        button(advanced, "Запустити помічника · Start helper") { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
         button(advanced, "Зупинити помічника · Stop helper") { Thread { Helper.stop(this); helperMsg = "stopped" }.start() }
 
         text(advanced, "Діагностика · Diagnostics", 15f, true)
@@ -286,22 +303,30 @@ class MainActivity : Activity() {
         touchLine.text = if (touch) "✅ Дотик з екрана Tesla · Touch from the Tesla" else "⬜ Дотик вимкнено (лише перегляд) · Touch off (view only)"
         touchBox.visibility = if (touch) View.GONE else View.VISIBLE
 
+        refreshHelper()
         if (advanced.visibility == View.VISIBLE) refreshAdvanced()
+    }
+
+    private fun refreshHelper() {
+        Thread { helperLine = Helper.ping(this) }.start()
+        val ok = helperLine != null && AutoHelperJob.canAutoStart(this)
+        helperBox.visibility = if (ok && !helperForceOpen) View.GONE else View.VISIBLE
+        (pairBtn as? android.widget.Button)?.text = if (Config.paired(this))
+            "Сполучити знову · Pair again (Wireless debugging)" else "Сполучити · Pair (Wireless debugging)"
+        helperStatus.text = if (ok && !helperForceOpen)
+            "✅ Помічник працює, автозапуск на Wi‑Fi увімкнено · Helper running, auto start on ▸"
+        else (if (Config.paired(this)) "✅ сполучено · paired\n" else "⬜ не сполучено · not paired\n") +
+            (if (helperLine != null) "✅ $helperLine" else "❌ помічник не запущено · helper not running") +
+            "\n" + (if (AutoHelperJob.canAutoStart(this)) "🔁 автозапуск на Wi‑Fi увімкнено · auto start on Wi‑Fi on"
+                     else "⚪ автозапуск з'явиться після першого запуску · auto start comes after the first start") +
+            AutoHelperJob.lastResult(this).let { if (it.isEmpty()) "" else "\n   останній автозапуск · last: $it" } +
+            (if (PairingService.state.isNotEmpty()) "\npairing: ${PairingService.state}" else "") +
+            (if (helperMsg.isNotEmpty()) "\n$helperMsg" else "")
     }
 
     // ---------- advanced ----------
 
     private fun refreshAdvanced() {
-        Thread { helperLine = Helper.ping(this) }.start()
-        // Always available: turning Developer options off forgets the pairing without the app knowing.
-        (pairBtn as? android.widget.Button)?.text = if (Config.paired(this))
-            "Сполучити знову · Pair again (Wireless debugging)" else "Сполучити · Pair (Wireless debugging)"
-        helperStatus.text = (if (Config.paired(this)) "✅ сполучено · paired\n" else "") + (if (helperLine != null) "✅ $helperLine" else "❌ не запущено · not running") +
-            "\n" + (if (AutoHelperJob.canAutoStart(this)) "🔁 автозапуск на Wi‑Fi увімкнено · auto start on Wi‑Fi on"
-                     else "⚪ автозапуск: запустіть помічника вручну один раз · auto start: start the helper by hand once") +
-            AutoHelperJob.lastResult(this).let { if (it.isEmpty()) "" else "\n   останній · last: $it" } +
-            (if (PairingService.state.isNotEmpty()) "\npairing: ${PairingService.state}" else "") +
-            (if (helperMsg.isNotEmpty()) "\n$helperMsg" else "")
         val srv = StreamService.instanceServer
         diag.text = buildString {
             append("address: ").append(if (CarVpnService.running) CarVpnService.address else "- ${CarVpnService.lastError}")

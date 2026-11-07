@@ -460,7 +460,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, sendH(frameH), quality, window,
                 TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail,
                 if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get(),
-                org.json.JSONObject.quote(car?.status?.let { st -> (if (carPower.isEmpty()) st else "$st · $carPower").also { carStatus = it } } ?: ""))
+                org.json.JSONObject.quote(car?.status?.let { st -> (if (carPower.isEmpty()) st else "$st · $carPower").also { carStatus = it } } ?: carStatus))
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
             stArea = 0; stSent = 0; stIdle = 0

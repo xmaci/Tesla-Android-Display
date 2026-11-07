@@ -81,10 +81,10 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         HelperMain.log("display ${w}x$h@$dpi home=$deco: system context…")
         // Built on another thread with a time limit: if Android's internals hang here, the helper
         // reports it instead of hanging itself.
+        // Android's display code needs a thread with a Looper: run it on the helper's main looper.
         var err: Throwable? = null
-        val t = Thread { try { ShellEnv.displayManager } catch (e: Throwable) { err = e } }.apply { isDaemon = true; start() }
-        t.join(5000)
-        if (t.isAlive || err != null) {
+        val done = onMain(5000) { try { ShellEnv.displayManager } catch (e: Throwable) { err = e } }
+        if (!done || err != null) {
             val c = err?.let { (it as? java.lang.reflect.InvocationTargetException)?.targetException ?: it }
             val why = if (c == null) "timeout (5 s)" else "${c.javaClass.simpleName} ${c.message}"
             HelperMain.log("system context failed: $why")
@@ -106,8 +106,14 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         val errors = StringBuilder()
         for ((name, flags) in tries) {
             try {
-                val vd = ShellEnv.displayManager.createVirtualDisplay("TeslaDroid car", w, h, dpi, r.surface, flags)
-                    ?: throw IllegalStateException("null display")
+                var made: VirtualDisplay? = null
+                var fail: Throwable? = null
+                if (!onMain(5000) {
+                        try { made = ShellEnv.displayManager.createVirtualDisplay("TeslaDroid car", w, h, dpi, r.surface, flags) }
+                        catch (e: Throwable) { fail = e }
+                    }) throw IllegalStateException("timeout")
+                fail?.let { throw it }
+                val vd = made ?: throw IllegalStateException("null display")
                 display = vd; reader = r; displayId = vd.display.displayId
                 text("OK $displayId $name ${w}x$h@$dpi")
                 return true
@@ -118,6 +124,13 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         r.close()
         text("ERR display: $errors")
         return false
+    }
+
+    /** Runs [block] on the main looper thread and waits up to [ms]; false on timeout. */
+    private fun onMain(ms: Long, block: () -> Unit): Boolean {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        Handler(android.os.Looper.getMainLooper()).post { try { block() } finally { latch.countDown() } }
+        return latch.await(ms, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     private fun newReader(w: Int, h: Int): ImageReader =

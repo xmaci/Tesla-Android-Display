@@ -23,6 +23,16 @@
         android:allowBackup="false"
         android:usesCleartextTraffic="true">
 
+        <!-- Home screen on the car screen; opened there by the helper (shell), hence exported -->
+        <activity
+            android:name=".CarHomeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.xmaci.tesladroid.carhome"
+            android:resizeableActivity="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

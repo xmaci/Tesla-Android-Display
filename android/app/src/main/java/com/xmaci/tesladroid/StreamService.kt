@@ -75,6 +75,11 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             private set
         @Volatile var instanceServer: CarServer? = null
             private set
+        @Volatile private var self: StreamService? = null
+        const val CAR_HOME = "com.xmaci.tesladroid/com.xmaci.tesladroid.CarHomeActivity"
+
+        /** From the car-screen home (CarHomeActivity): open [component] on the car screen. */
+        fun launchOnCar(component: String) { self?.let { it.carLaunch = component; it.car?.launch(component) } }
         /** Last 5 s profile from the car: one-line summary + where the JSON was saved. */
         @Volatile var lastProfile = ""
             private set
@@ -167,7 +172,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     @Volatile private var car: CarDisplay? = null
     @Volatile private var vpW = 0
     @Volatile private var vpH = 0
-    private var carLaunch = ""
+    @Volatile private var carLaunch = ""
 
     private fun sendH(fh: Int): Int = if (carMode) fh else if (cropReq in 64 until fh) (cropReq / 2) * 2 else fh
     private val mjOpen = java.util.concurrent.atomic.AtomicInteger(0)   // MJPEG streams being sent now
@@ -203,6 +208,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        self = this
         if (intent?.action == ACTION_STOP) {
             shutdown(); stopSelf(); return START_NOT_STICKY
         }
@@ -632,7 +638,12 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             "prof" -> { val json = text.substring(5); Thread({ saveProfile(json) }, "profile-save").start() }
             "load" -> p.getOrNull(1)?.toIntOrNull()?.let { onCarLoad(it) }
             "t" -> touch(conn, p)
-            "k" -> { val k = p.getOrNull(1) ?: ""; val c = car; if (carMode && c != null && k != "notifications") c.key(k) else TouchService.instance?.key(k) }
+            "k" -> {
+                val k = p.getOrNull(1) ?: ""; val c = car
+                if (carMode && c != null && k == "home") { carLaunch = ""; c.launch(CAR_HOME) }   // our home: the system one locks with the phone
+                else if (carMode && c != null && k != "notifications") c.key(k)
+                else TouchService.instance?.key(k)
+            }
             "mode" -> if (p.getOrNull(1) == "car") startCar() else stopCar()
             "vp" -> {
                 val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
@@ -755,7 +766,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     override fun onCarText(line: String) {
         // The display is ready: open the last app again (the screen is new and empty without a launcher).
-        if (line.startsWith("OK ") && carLaunch.isNotEmpty()) car?.launch(carLaunch)
+        if (line.startsWith("OK ")) {
+            car?.launch(CAR_HOME)
+            if (carLaunch.isNotEmpty() && carLaunch != CAR_HOME) car?.launch(carLaunch)
+        }
         if (line.startsWith("launch:") || line.startsWith("ERR") || line.startsWith("power:")) conn?.sendText("cd:" + line)
         if (line.startsWith("power:")) carPower = line
     }
@@ -811,6 +825,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     }
 
     override fun onDestroy() {
+        if (self === this) self = null
         try { getSystemService(DisplayManager::class.java).unregisterDisplayListener(rotationListener) } catch (_: Exception) {}
         shutdown()
         captureThread.quitSafely()

@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.10.5"
+        const val VERSION = "0.11.0"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -70,6 +70,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AutoHelperJob.schedule(this)
         dp = resources.displayMetrics.density
         val pad = (16 * dp).toInt()
         val col = LinearLayout(this).apply {
@@ -296,6 +297,9 @@ class MainActivity : Activity() {
         (pairBtn as? android.widget.Button)?.text = if (Config.paired(this))
             "Сполучити знову · Pair again (Wireless debugging)" else "Сполучити · Pair (Wireless debugging)"
         helperStatus.text = (if (Config.paired(this)) "✅ сполучено · paired\n" else "") + (if (helperLine != null) "✅ $helperLine" else "❌ не запущено · not running") +
+            "\n" + (if (AutoHelperJob.canAutoStart(this)) "🔁 автозапуск на Wi‑Fi увімкнено · auto start on Wi‑Fi on"
+                     else "⚪ автозапуск: запустіть помічника вручну один раз · auto start: start the helper by hand once") +
+            AutoHelperJob.lastResult(this).let { if (it.isEmpty()) "" else "\n   останній · last: $it" } +
             (if (PairingService.state.isNotEmpty()) "\npairing: ${PairingService.state}" else "") +
             (if (helperMsg.isNotEmpty()) "\n$helperMsg" else "")
         val srv = StreamService.instanceServer

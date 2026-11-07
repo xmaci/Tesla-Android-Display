@@ -72,7 +72,9 @@ object Helper {
         val pkg = ctx.packageName
         val svc = "$pkg/${TouchService::class.java.name}"
         // PROJECT_MEDIA allow: Android stops asking "Share your screen with TeslaDroid?" every start.
-        runShell(adb, "appops set $pkg PROJECT_MEDIA allow; appops set $pkg ACCESS_RESTRICTED_SETTINGS allow; " +
+        // WRITE_SECURE_SETTINGS: from now on the app restarts the helper by itself on Wi‑Fi (AutoHelperJob).
+        runShell(adb, "pm grant $pkg android.permission.WRITE_SECURE_SETTINGS; " +
+            "appops set $pkg PROJECT_MEDIA allow; appops set $pkg ACCESS_RESTRICTED_SETTINGS allow; " +
             "S=\$(settings get secure enabled_accessibility_services); " +
             "case \"\$S\" in *$svc*) ;; null|\"\") settings put secure enabled_accessibility_services $svc ;; " +
             "*) settings put secure enabled_accessibility_services \"\$S:$svc\" ;; esac; " +

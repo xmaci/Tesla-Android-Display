@@ -28,12 +28,17 @@ import kotlin.system.exitProcess
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 7
+    const val VERSION = 8
 
     private var server: ServerSocket? = null
 
     @JvmStatic
     fun main(args: Array<String>) {
+        // An uncaught error in any thread would kill the whole helper (and the car screen with it):
+        // log it and keep running instead.
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            log("uncaught in ${t.name}: ${android.util.Log.getStackTraceString(e).take(1500)}")
+        }
         val token = args.firstOrNull()
         if (token.isNullOrBlank()) { System.err.println("token required"); exitProcess(2) }
         server = try {
@@ -53,10 +58,13 @@ object HelperMain {
             }
             exitProcess(0)
         }
-        Looper.loop()
+        while (true) {
+            try { Looper.loop() } catch (t: Throwable) { log("main looper: ${android.util.Log.getStackTraceString(t).take(1500)}") }
+        }
     }
 
-    fun log(msg: String) { System.err.println(msg); System.err.flush() }
+    private val logTime = java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US)
+    fun log(msg: String) { System.err.println(logTime.format(java.util.Date()) + " " + msg); System.err.flush() }
 
     private fun handle(s: Socket, token: String) {
         var keep = false

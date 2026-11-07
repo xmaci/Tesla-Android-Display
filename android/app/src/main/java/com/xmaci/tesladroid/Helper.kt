@@ -77,13 +77,17 @@ object Helper {
             "*) settings put secure enabled_accessibility_services \"\$S:$svc\" ;; esac; " +
             "settings put secure accessibility_enabled 1", 1500)
 
+        // Why did the previous helper stop? Keep its log and how long the phone has been on
+        // (a short uptime = the phone rebooted, which always ends the helper).
+        val prev = runShell(adb, "L=/data/local/tmp/tesladroid-helper.log; tail -c 400 \$L 2>/dev/null; " +
+            "mv -f \$L \$L.prev 2>/dev/null; echo; echo \"phone on: \$(cut -d. -f1 /proc/uptime)s\"", 1500).trim()
         // A helper that hangs keeps the port and ignores "quit": kill every old copy first.
         runShell(adb, "pkill -f tesladroid.helper.HelperMain; sleep 0.5", 1200)
         val apk = ctx.applicationInfo.sourceDir
         val launch = runShell(adb, "CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
             " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null & echo launched", 1500)
         repeat(20) {
-            ping(ctx)?.let { return "running: $it" }
+            ping(ctx)?.let { return "running: $it\n— попередній запуск · last run —\n${prev.takeLast(450)}" }
             Thread.sleep(250)
         }
         // Not answering: show what happened (the log is only readable by the shell user).

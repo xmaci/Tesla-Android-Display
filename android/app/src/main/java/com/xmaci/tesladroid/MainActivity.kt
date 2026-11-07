@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.11.1"
+        const val VERSION = "0.11.2"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -65,6 +65,7 @@ class MainActivity : Activity() {
     private lateinit var pairBtn: View
     private lateinit var helperBox: LinearLayout
     private var helperForceOpen = false
+    private lateinit var startHelperBtn: View
     private lateinit var diag: TextView
     @Volatile private var helperMsg = ""
     @Volatile private var helperLine: String? = null
@@ -109,9 +110,9 @@ class MainActivity : Activity() {
         text(helperBox, "Один раз, вдома на Wi‑Fi (роздачу вимкнути):\n" +
             "1) Параметри розробника → Бездротове налагодження: увімкнути, «Завжди дозволяти в цій мережі».\n" +
             "2) «Сполучити» → «Сполучити пристрій за допомогою коду» → 6 цифр у сповіщення TeslaDroid.\n" +
-            "3) «Запустити помічника». Далі він запускається сам після кожного перезавантаження, коли телефон на Wi‑Fi.\n" +
+            "Помічник запуститься сам — і далі після кожного перезавантаження, коли телефон на Wi‑Fi.\n" +
             "Once, at home on Wi‑Fi (hotspot off): Developer options → Wireless debugging on (always allow on this network) → " +
-            "Pair (6 digits into the TeslaDroid notification) → Start helper. Then it restarts itself on Wi‑Fi after every reboot.",
+            "Pair (6 digits into the TeslaDroid notification). The helper starts by itself, and again after every reboot on Wi‑Fi.",
             12f, color = GREY)
         button(helperBox, "Параметри розробника · Developer options") {
             try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
@@ -125,7 +126,8 @@ class MainActivity : Activity() {
             try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
             catch (_: Exception) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
         }
-        button(helperBox, "Запустити помічника · Start helper") { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
+        // Only needed when pairing worked but the helper did not come up (shown then).
+        startHelperBtn = button(helperBox, "Запустити помічника · Start helper") { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
         // Tap the status to show the steps again even when everything works.
         helperStatus.setOnClickListener { helperForceOpen = !helperForceOpen }
 
@@ -207,6 +209,11 @@ class MainActivity : Activity() {
             return
         }
         Config.setIp(this, ip)
+        // Like ATTD's «Старт»: bring the helper up too if it is not running and the phone is on Wi‑Fi.
+        if (Config.paired(this) && helperLine == null && phoneOnWifi()) {
+            helperMsg = "…"
+            Thread { helperMsg = if (AutoHelperJob.canAutoStart(this)) AutoHelperJob.tryStart(this) else Helper.start(this) }.start()
+        }
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
             return
@@ -311,6 +318,7 @@ class MainActivity : Activity() {
         Thread { helperLine = Helper.ping(this) }.start()
         val ok = helperLine != null && AutoHelperJob.canAutoStart(this)
         helperBox.visibility = if (ok && !helperForceOpen) View.GONE else View.VISIBLE
+        startHelperBtn.visibility = if (Config.paired(this) && (helperLine == null || helperForceOpen)) View.VISIBLE else View.GONE
         (pairBtn as? android.widget.Button)?.text = if (Config.paired(this))
             "Сполучити знову · Pair again (Wireless debugging)" else "Сполучити · Pair (Wireless debugging)"
         helperStatus.text = if (ok && !helperForceOpen)

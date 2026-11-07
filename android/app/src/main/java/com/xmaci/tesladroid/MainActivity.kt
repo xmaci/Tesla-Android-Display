@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.10.0"
+        const val VERSION = "0.10.1"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -208,7 +208,12 @@ class MainActivity : Activity() {
     private fun onVpnReady() {
         CarVpnService.start(this)
         val mpm = getSystemService(MediaProjectionManager::class.java)
-        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+        // Android 14+: ask for the whole screen straight away (no "one app" choice): with one app shared,
+        // switching apps would leave the car black.
+        val intent = if (android.os.Build.VERSION.SDK_INT >= 34)
+            mpm.createScreenCaptureIntent(android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay())
+        else mpm.createScreenCaptureIntent()
+        startActivityForResult(intent, REQ_CAPTURE)
     }
 
     @Deprecated("plain Activity API")

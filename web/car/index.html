@@ -36,7 +36,7 @@
   #prof { position: absolute; top: 72px; left: 8px; right: 8px; background: #101820; border: 1px solid #2a6fdb; border-radius: 10px; padding: 12px 14px; display: none; font-size: 17px; line-height: 24px; color: #dde; white-space: pre-wrap; font-family: monospace; }
   #msg { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 26px; color: #888; }
   .dot { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 18px; background: rgba(42,111,219,0.6); pointer-events: none; }
-  #panel { position: absolute; top: 72px; left: 8px; right: 8px; background: #1b1b1b; border: 1px solid #333; border-radius: 10px; padding: 12px 14px; display: none; }
+  #panel { position: absolute; top: 72px; left: 8px; right: 8px; background: #1b1b1b; border: 1px solid #333; border-radius: 10px; padding: 12px 14px; display: none; overflow-y: auto; -webkit-overflow-scrolling: touch; z-index: 5; box-sizing: border-box; }
   #panel .row { margin: 6px 0 14px; }
   #panel .lbl { font-size: 18px; color: #aaa; margin-bottom: 6px; }
   #panel button { font-size: 22px; min-width: 96px; height: 54px; margin: 0 8px 8px 0; background: #2b2b2b; color: #eee; border: 2px solid #2b2b2b; border-radius: 8px; }
@@ -74,7 +74,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.10.0</div>
+  <div id="ver">v0.10.1</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
@@ -94,6 +94,8 @@
   <div class="row carOnly" style="display:none"><div class="lbl">Верхній рядок (↻, 5s, статистика) · Top bar</div><div id="optT"></div></div>
   <div class="row carOnly" id="appsRow" style="display:none"><div class="lbl">Програми · Apps</div>
     <button id="bApps">Показати · Show</button><div id="appList"></div></div>
+  <button id="bAdv">Зображення · Picture ▸</button>
+  <div id="adv" style="display:none">
   <div class="row"><div class="lbl">Розмір кадру · Frame width</div><div id="optW"></div>
     <div class="hint">телефон горизонтально → 640–800 · phone in landscape → 640–800</div></div>
   <div class="row"><div class="lbl">Якість · Quality</div><div id="optQ"></div></div>
@@ -104,6 +106,7 @@
     <div class="hint">лише gpu / draw / fit / 1:1 · дотик скидає буфер · only canvas views · a touch empties it</div></div>
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
     <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
+  </div>
   <div class="row"><div class="lbl">Повний екран · Full screen</div><button id="bFull">Спробувати · Try</button>
     <div class="hint" id="fullRes">MCU1 може не дозволити · MCU1 may refuse</div></div>
   <button id="bClose">✕ Закрити · Close</button>
@@ -223,9 +226,19 @@
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
 
   // One action per real tap. MCU1 delivers a tap as touchend + emulated click (sometimes late).
+  // A finger that moved more than 14 px was scrolling (the settings list), not tapping.
+  var touchY0 = 0, touchX0 = 0, touchMoved = false;
+  document.addEventListener('touchstart', function (e) {
+    var t = e.touches && e.touches[0]; if (t) { touchX0 = t.clientX; touchY0 = t.clientY; touchMoved = false; }
+  }, true);
+  document.addEventListener('touchmove', function (e) {
+    var t = e.touches && e.touches[0];
+    if (t && (Math.abs(t.clientY - touchY0) > 14 || Math.abs(t.clientX - touchX0) > 14)) { touchMoved = true; }
+  }, true);
   function onTap(el, fn, gapMs) {
     var last = -10000;
     function fire(e) {
+      if (e && e.type === 'touchend' && touchMoved) { return; }
       if (e) { e.preventDefault(); }
       var n = now();
       if (n - last < gapMs) { return; }
@@ -280,6 +293,15 @@
   buildOptions('o', 'optO', function (v) { return { auto: 'Авто', bottom: 'Знизу · Bottom', left: 'Зліва · Left', right: 'Справа · Right' }[v]; });
   buildOptions('t', 'optT', function (v) { return v === 'on' ? 'Показувати · Show' : 'Авто · Auto'; });
   carRows();
+
+  // The car screen failed: say why, big, over the picture (the top bar with the status may be hidden).
+  var carFailShown = false;
+  function carBanner(cd) {
+    if (set.d === 'car' && cd.charAt(0) === '✗') {
+      msg.innerHTML = 'Екран «Авто» не запущено · Car screen not running<br><span style="font-size:18px">' + esc(cd) + '</span>';
+      msg.style.display = 'block'; carFailShown = true;
+    } else if (carFailShown) { msg.style.display = 'none'; carFailShown = false; }
+  }
 
   // ---- car panel (dock) ----
   var panelData = null;
@@ -403,7 +425,19 @@
   onTap(document.getElementById('bApps'), loadApps, 1000);
   markOptions(); applyScaling();
   var panelOpen = false;
-  function showPanel(open) { panelOpen = open; panel.style.display = open ? 'block' : 'none'; }
+  function showPanel(open) {
+    panelOpen = open;
+    var t = document.getElementById('bar').style.display === 'none' ? 8 : 72;
+    panel.style.top = t + 'px';
+    panel.style.maxHeight = (window.innerHeight - t - 8) + 'px';     // scrolls when it does not fit
+    panel.style.display = open ? 'block' : 'none';
+  }
+  var advOpen = false;
+  onTap(document.getElementById('bAdv'), function () {
+    advOpen = !advOpen;
+    document.getElementById('adv').style.display = advOpen ? 'block' : 'none';
+    document.getElementById('bAdv').innerHTML = 'Зображення · Picture ' + (advOpen ? '▾' : '▸');
+  }, 400);
   onTap(document.getElementById('bSet'), function () { showPanel(!panelOpen); }, 1000);
   onTap(document.getElementById('bClose'), function () { showPanel(false); }, 500);
 
@@ -493,10 +527,12 @@
         try { server = JSON.parse(d.substr(2)); } catch (e) {}
         // In MJPEG views the frame size is only known from the phone's stats.
         if (isMj() && server.w && (server.w !== frameW || server.h !== frameH)) { frameW = server.w; frameH = server.h; layout(); }
+        carBanner(server.cd || '');
         if (set.d === 'car' && server.cd !== undefined && panelOpen) { document.getElementById('carRes').innerHTML = (server.cd || '…').replace(/</g, '&lt;'); }
         showStats();
       }
       else if (d === 'pn') { loadPanel(); }
+      else if (d.indexOf('cd:') === 0 && d.charAt(3) === '✗') { carBanner(d.substr(3)); document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('cd:') === 0) { document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('ti:') === 0) {
         var r = d.substr(3);
@@ -719,7 +755,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.10.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.10.1 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',

@@ -92,7 +92,9 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             return false
         }
         HelperMain.log("display: creating")
-        val base = PUBLIC or PRESENTATION or OWN_CONTENT_ONLY or SUPPORTS_TOUCH or ROTATES_WITH_CONTENT or DESTROY_CONTENT_ON_REMOVAL
+        // No PRESENTATION flag: Android shows its lock screen (clock) on every presentation display while
+        // the phone is locked, which covered the launcher on the car screen.
+        val base = PUBLIC or OWN_CONTENT_ONLY or SUPPORTS_TOUCH or ROTATES_WITH_CONTENT or DESTROY_CONTENT_ON_REMOVAL
         val unlocked = TRUSTED or OWN_DISPLAY_GROUP or ALWAYS_UNLOCKED or TOUCH_FEEDBACK_DISABLED
         val focus = OWN_FOCUS or DEVICE_DISPLAY_GROUP
         val d = if (deco) SHOULD_SHOW_SYSTEM_DECORATIONS else 0

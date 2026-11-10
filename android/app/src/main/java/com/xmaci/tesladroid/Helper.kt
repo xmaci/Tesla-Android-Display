@@ -89,7 +89,7 @@ object Helper {
         val apk = ctx.applicationInfo.sourceDir
         val launch = runShell(adb, "CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
             " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null & echo launched", 1500)
-        repeat(20) {
+        repeat(40) {          // up to 10 s: the first start on a phone can be slow
             ping(ctx)?.let { return "running: $it\n— попередній запуск · last run —\n${prev.takeLast(450)}" }
             Thread.sleep(250)
         }

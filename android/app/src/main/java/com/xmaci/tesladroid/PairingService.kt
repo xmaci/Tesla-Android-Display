@@ -83,7 +83,13 @@ class PairingService : Service() {
                 state = "paired — starting helper"
                 update("Сполучено ✓ Запуск помічника… · Paired ✓ Starting helper…", false)
                 val result = Helper.start(this)
-                finish(result)
+                // The first start can take longer than Helper.start waits: check once more before reporting.
+                val helperOk = result.startsWith("running") || result.startsWith("already") || result.startsWith("updated") ||
+                    run { Thread.sleep(4000); Helper.ping(this) != null }
+                state = result
+                finish(if (helperOk) "✅ Готово: сполучено, помічник працює · Done: paired, helper running"
+                       else "⚠ Сполучено, але помічник не відповідає — відкрийте TeslaDroid · Paired, helper not answering — open TeslaDroid",
+                    keepState = true)
             } catch (e: Exception) {
                 Log.w(TAG, "pairing failed", e)
                 update("Помилка · Error: ${e.message}", true)
@@ -91,8 +97,8 @@ class PairingService : Service() {
         }
     }
 
-    private fun finish(result: String) {
-        state = result
+    private fun finish(result: String, keepState: Boolean = false) {
+        if (!keepState) state = result
         mdns?.stop(); mdns = null
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID + 1,
             Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)

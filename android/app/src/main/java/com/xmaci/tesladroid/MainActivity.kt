@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.4"
+        const val VERSION = "0.13.5"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -387,8 +387,9 @@ class MainActivity : Activity() {
     }
 
     /**
-     * The hint as a short heads-up notification at the TOP of the screen: a toast sits at the bottom, right
-     * over «Build number», and Android no longer lets apps move toasts. Silent, gone after 12 s.
+     * The hint as a heads-up notification at the TOP of the screen: a toast sits at the bottom, right over
+     * «Build number», and Android no longer lets apps move toasts. Silent; after a few seconds Android moves
+     * it into the shade, so the row to tap is free on every phone (Xiaomi has it near the top).
      */
     private fun topHint(text: String) {
         if (text.isEmpty()) return
@@ -403,7 +404,8 @@ class MainActivity : Activity() {
             .setContentTitle("TeslaDroid")
             .setContentText(text)
             .setStyle(android.app.Notification.BigTextStyle().bigText(text))
-            .setTimeoutAfter(12_000)
+            // No timeout: Android shows it on top for a few seconds only, then it waits in the shade
+            // (pull down to read again) until the step is done — then refreshSetup removes it.
             .setAutoCancel(true)
             .build())
     }
@@ -463,9 +465,7 @@ class MainActivity : Activity() {
 
     private fun stepAction(k: Int) {
         when (k) {
-            // Xiaomi: the row is at the top, where the hint notification would cover it — no hint there.
-            0 -> openSettings(Settings.ACTION_DEVICE_INFO_SETTINGS, "build_number",
-                if (isXiaomi()) "" else buildNumberWhere())
+            0 -> openSettings(Settings.ACTION_DEVICE_INFO_SETTINGS, "build_number", buildNumberWhere())
             1 -> openSettings(Settings.ACTION_WIFI_SETTINGS, null, "Підключіться до Wi‑Fi · Connect to Wi‑Fi")
             2 -> openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless",
                 "Увімкніть «Бездротове налагодження» · Turn on Wireless debugging")
@@ -474,9 +474,15 @@ class MainActivity : Activity() {
         }
     }
 
+    private var hintStep = -2
+
     private fun refreshSetup() {
         val st = steps()
         val current = st.indexOfFirst { !it.done }
+        if (current != hintStep) {          // step done (or changed): its hint in the shade is no longer needed
+            if (hintStep != -2) getSystemService(android.app.NotificationManager::class.java).cancel(77)
+            hintStep = current
+        }
         for ((k, x) in st.withIndex()) {
             val now = k == current
             stepTitle[k].text = (if (x.done) "✅ " else if (now) "👉 " else "⬜ ") + "${k + 1}. ${x.title}"

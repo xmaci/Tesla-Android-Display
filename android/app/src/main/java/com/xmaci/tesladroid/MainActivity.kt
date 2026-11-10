@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.7"
+        const val VERSION = "0.13.8"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -413,13 +413,31 @@ class MainActivity : Activity() {
             .build())
     }
 
+    /**
+     * Opens the «Wireless debugging» screen itself (toggle + «Pair device with pairing code»), the way a long
+     * press on its Quick Settings tile does: Developer options opened with QS_TILE_PREFERENCES for the
+     * WirelessDebugging tile goes straight to WirelessDebuggingFragment (AOSP, Android 12+). Falls back to
+     * Developer options with the row highlighted.
+     */
+    private fun openWirelessDebugging(hint: String) {
+        val tile = android.content.ComponentName("com.android.settings",
+            "com.android.settings.development.qstile.DevelopmentTiles\$WirelessDebugging")
+        val i = Intent("android.service.quicksettings.action.QS_TILE_PREFERENCES")
+            .setComponent(android.content.ComponentName("com.android.settings",
+                "com.android.settings.Settings\$DevelopmentSettingsDashboardActivity"))
+            .putExtra(Intent.EXTRA_COMPONENT_NAME, tile)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { startActivity(i); topHint(hint) }
+        catch (_: Exception) { openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless", hint) }
+    }
+
     private fun startPairing() {
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
         }
         PairingService.start(this)
         // no hint here: the pairing notification itself (code entry) must stay on top
-        openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless", "")
+        openWirelessDebugging("")
     }
 
     private class Step(val done: Boolean, val title: String, val what: String, val button: String)
@@ -437,7 +455,7 @@ class MainActivity : Activity() {
                 "Wireless debugging only works on Wi‑Fi (at home). Turn the hotspot off for now.",
                 "Відкрити Wi‑Fi · Open Wi‑Fi"),
             Step(adb || helper, "Бездротове налагодження · Wireless debugging",
-                "Кнопка відкриє «Параметри розробника»: увімкніть перемикач «Бездротове налагодження». " +
+                "Кнопка відкриє «Бездротове налагодження»: увімкніть перемикач угорі. " +
                 "У запиті поставте галочку «Завжди дозволяти в цій мережі» і натисніть «Дозволити».\n" +
                 "Turn on «Wireless debugging», tick «Always allow on this network», tap Allow.",
                 "Відкрити й увімкнути · Open and turn on"),
@@ -470,8 +488,8 @@ class MainActivity : Activity() {
         when (k) {
             0 -> openSettings(Settings.ACTION_DEVICE_INFO_SETTINGS, "build_number", buildNumberWhere())
             1 -> openSettings(Settings.ACTION_WIFI_SETTINGS, null, "Підключіться до Wi‑Fi · Connect to Wi‑Fi")
-            2 -> openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless",
-                "Увімкніть «Бездротове налагодження» · Turn on Wireless debugging")
+            2 -> openWirelessDebugging("Увімкніть перемикач угорі, «Завжди дозволяти в цій мережі» → «Дозволити» · " +
+                "Turn on the switch at the top, always allow on this network")
             3 -> startPairing()
             4 -> { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
         }

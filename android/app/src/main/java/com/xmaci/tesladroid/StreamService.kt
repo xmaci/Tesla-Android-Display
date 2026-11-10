@@ -80,12 +80,18 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         const val CAR_HOME = "com.xmaci.tesladroid/com.xmaci.tesladroid.CarHomeActivity"
 
         /** From the car-screen home (CarHomeActivity): open [component] on the car screen. */
+        // Called from CarHomeActivity on the main thread: sending to the car is network I/O, which Android
+        // forbids there (NetworkOnMainThreadException crashed the whole app, stopping the stream).
         fun launchOnCar(component: String) {
-            self?.let { it.carLaunch = component; it.car?.launch(component); CarApps.addRecent(it, component); it.panelChanged() }
+            val svc = self ?: return
+            Thread {
+                svc.carLaunch = component; svc.car?.launch(component)
+                CarApps.addRecent(svc, component); svc.panelChanged()
+            }.start()
         }
 
         /** Car-screen home: long press pins/unpins an app on the car panel. */
-        fun favouritesChanged() { self?.panelChanged() }
+        fun favouritesChanged() { val svc = self ?: return; Thread { svc.panelChanged() }.start() }
         /** Last 5 s profile from the car: one-line summary + where the JSON was saved. */
         @Volatile var lastProfile = ""
             private set
@@ -596,7 +602,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     }
 
     /** Favourites or recents changed: the car page reloads its panel. */
-    private fun panelChanged() { conn?.sendText("pn") }
+    private fun panelChanged() { try { conn?.sendText("pn") } catch (_: Throwable) {} }
 
     /** GET /apps -> [{"n":"Maps","c":"pkg/cls"}, …]: apps that can be opened on the car screen. */
     private fun sendApps(out: java.io.OutputStream) {

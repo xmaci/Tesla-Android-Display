@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.6"
+        const val VERSION = "0.13.7"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -82,6 +82,10 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AutoHelperJob.schedule(this)
+        // Ask for notifications up front, in the app (pairing code entry and setup hints need them).
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
+        }
         dp = resources.displayMetrics.density
         val pad = (16 * dp).toInt()
         val col = LinearLayout(this).apply {
@@ -393,9 +397,8 @@ class MainActivity : Activity() {
      */
     private fun topHint(text: String) {
         if (text.isEmpty()) return
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9); return
-        }
+        // Never ask here: the question would pop up over the settings screen just opened (asked at app start).
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val nm = getSystemService(android.app.NotificationManager::class.java)
         nm.createNotificationChannel(android.app.NotificationChannel("hints", "Підказки · Hints",
             android.app.NotificationManager.IMPORTANCE_HIGH).apply { setSound(null, null); enableVibration(false) })

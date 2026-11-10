@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.1"
+        const val VERSION = "0.13.2"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -72,6 +72,7 @@ class MainActivity : Activity() {
     private val stepTitle = ArrayList<TextView>()
     private val stepDesc = ArrayList<TextView>()
     private val stepBtn = ArrayList<Button>()
+    private val stepSkip = ArrayList<Button>()
     private lateinit var helperFoot: TextView
     private lateinit var diag: TextView
     @Volatile private var helperMsg = ""
@@ -119,6 +120,10 @@ class MainActivity : Activity() {
             stepTitle.add(text(helperBox, "", 15f, true))
             stepDesc.add(text(helperBox, "", 13f, color = GREY))
             stepBtn.add(button(helperBox, "") { stepAction(k) })
+            // If a check is wrong on some phone, the user can move on.
+            stepSkip.add(button(helperBox, "Вже зроблено · Already done") {
+                getSharedPreferences("tesladroid", MODE_PRIVATE).edit().putBoolean("step_done_$k", true).apply()
+            })
         }
         pairBtn = button(helperBox, "Сполучити знову · Pair again") { startPairing() }
         helperFoot = text(helperBox, "", 12f, color = GREY)
@@ -357,7 +362,17 @@ class MainActivity : Activity() {
 
     // ---------- step 1: guided setup ----------
 
-    private fun devOptionsOn() = Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+    /**
+     * Android 17 (Pixel) no longer shows apps the Developer options flag: also count any debugging being on
+     * (impossible without Developer options), or the user saying it is done.
+     */
+    private fun devOptionsOn(): Boolean {
+        fun g(k: String) = try { Settings.Global.getInt(contentResolver, k, 0) == 1 } catch (_: Exception) { false }
+        fun sec(k: String) = try { Settings.Secure.getInt(contentResolver, k, 0) == 1 } catch (_: Exception) { false }
+        return g(Settings.Global.DEVELOPMENT_SETTINGS_ENABLED) || sec(Settings.Global.DEVELOPMENT_SETTINGS_ENABLED) ||
+            g(Settings.Global.ADB_ENABLED) || g("adb_wifi_enabled") || skipped(0)
+    }
+    private fun skipped(k: Int) = getSharedPreferences("tesladroid", MODE_PRIVATE).getBoolean("step_done_$k", false)
     private fun wirelessDebuggingOn() = Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
 
     /** Opens a settings screen with one row highlighted (the same extras Shizuku uses). */
@@ -368,7 +383,7 @@ class MainActivity : Activity() {
             i.putExtra(":settings:show_fragment_args", android.os.Bundle().apply { putString(":settings:fragment_args_key", highlight) })
         }
         try { startActivity(i) } catch (_: Exception) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
-        Toast.makeText(this, hint, Toast.LENGTH_LONG).show()
+        // No toast: it covered the very row to tap (Build number). The steps in the app explain it.
     }
 
     private fun startPairing() {
@@ -385,14 +400,14 @@ class MainActivity : Activity() {
 
     private fun steps(): List<Step> {
         val dev = devOptionsOn(); val wifi = phoneOnWifi(); val paired = Config.paired(this); val helper = helperLine != null
-        val adb = dev && wirelessDebuggingOn()          // the setting stays 1 even with Developer options off
+        val adb = (dev && wirelessDebuggingOn()) || skipped(2)   // the setting stays 1 even with Developer options off
         return listOf(
             Step(dev, "Режим розробника · Developer options",
                 "Потрібні налаштування Android ховає в «Параметрах розробника». Кнопка відкриє «Про телефон»: " +
                 "натисніть «Номер збірки» 7 разів поспіль і введіть PIN, потім поверніться сюди.\n" +
                 "Open About phone, tap «Build number» 7 times, enter your PIN, come back.",
                 "Відкрити «Про телефон» · Open About phone"),
-            Step(wifi || helper, "Wi‑Fi",
+            Step(wifi || helper || skipped(1), "Wi‑Fi",
                 "Бездротове налагодження працює лише тоді, коли телефон підключений до Wi‑Fi (вдома). Роздачу на цей час вимкніть.\n" +
                 "Wireless debugging only works on Wi‑Fi (at home). Turn the hotspot off for now.",
                 "Відкрити Wi‑Fi · Open Wi‑Fi"),
@@ -435,6 +450,7 @@ class MainActivity : Activity() {
             stepDesc[k].visibility = if (now) View.VISIBLE else View.GONE
             stepBtn[k].text = x.button
             stepBtn[k].visibility = if (now) View.VISIBLE else View.GONE
+            stepSkip[k].visibility = if (now && k <= 2) View.VISIBLE else View.GONE
         }
         pairBtn.visibility = if (current < 0 && helperForceOpen) View.VISIBLE else View.GONE
     }

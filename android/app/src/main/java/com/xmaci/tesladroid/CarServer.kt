@@ -22,6 +22,12 @@ class CarServer(
     private val openAsset: (String) -> ByteArray?,
     private val listener: Listener,
     private val log: (String) -> Unit = {},
+    /**
+     * Which local address a client may connect to. The server binds 0.0.0.0 (the car's packets arrive on
+     * the VPN address), so without this anyone on the same Wi‑Fi or network as the phone could watch and
+     * control it. StreamService allows only the car address (7.7.7.8) and the phone itself.
+     */
+    private val allowLocal: (String) -> Boolean = { true },
 ) {
     interface Listener {
         fun onOpen(conn: Conn)
@@ -98,6 +104,11 @@ class CarServer(
 
     private fun handle(sock: Socket) {
         val who = "${sock.inetAddress?.hostAddress} → ${sock.localAddress?.hostAddress}:${sock.localPort}"
+        if (!allowLocal(sock.localAddress?.hostAddress ?: "")) {
+            note("refused $who (not the car address)")
+            try { sock.close() } catch (_: IOException) {}
+            return
+        }
         note("connect $who")
         try {
             sock.tcpNoDelay = true

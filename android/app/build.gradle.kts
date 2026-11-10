@@ -1,6 +1,13 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+
+val relProps = Properties().apply {
+    val f = rootProject.file("keystore.properties"); if (f.exists()) f.inputStream().use { this.load(it) }
 }
 
 android {
@@ -11,12 +18,14 @@ android {
         applicationId = "com.xmaci.tesladroid"
         minSdk = 33
         targetSdk = 35
-        versionCode = 62
-        versionName = "0.12.0"
+        versionCode = 63
+        versionName = "0.13.0"
         ndk { abiFilters += setOf("arm64-v8a") }   // Pixel 7 and other modern phones
     }
 
-    // Shared personal dev key (in repo) so every build can update the installed app in place.
+    // Official builds are signed with a private key kept OUT of the repo (keystore.properties +
+    // keystore/release.keystore, git-ignored). Without it (a fork, CI) builds use the old public dev key,
+    // which the licence check refuses (License.SIGNER_SHA256).
     signingConfigs {
         create("dev") {
             storeFile = rootProject.file("keystore/dev.keystore")
@@ -24,12 +33,19 @@ android {
             keyAlias = "dev"
             keyPassword = "tesladroid"
         }
+        if (relProps.getProperty("storeFile") != null) create("rel") {
+            storeFile = rootProject.file(relProps.getProperty("storeFile"))
+            storePassword = relProps.getProperty("storePassword")
+            keyAlias = relProps.getProperty("keyAlias")
+            keyPassword = relProps.getProperty("keyPassword")
+        }
     }
+    val official = signingConfigs.findByName("rel") ?: signingConfigs.getByName("dev")
     buildTypes {
-        getByName("debug") { signingConfig = signingConfigs.getByName("dev") }
+        getByName("debug") { signingConfig = official }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("dev")
+            signingConfig = official
         }
     }
     compileOptions {

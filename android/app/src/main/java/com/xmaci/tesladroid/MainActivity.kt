@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.12.0"
+        const val VERSION = "0.13.0"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -65,6 +65,10 @@ class MainActivity : Activity() {
     private lateinit var pairBtn: View
     private lateinit var helperBox: LinearLayout
     private var helperForceOpen = false
+    private lateinit var licLine: TextView
+    private lateinit var licBox: LinearLayout
+    private lateinit var licField: EditText
+    private var licOpen = false
     private lateinit var setupSteps: TextView
     private lateinit var setupBtn: View
     private lateinit var startHelperBtn: View
@@ -120,6 +124,33 @@ class MainActivity : Activity() {
         startHelperBtn = button(helperBox, "Запустити помічника · Start helper") { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
         // Tap the status to show the steps again even when everything works.
         helperStatus.setOnClickListener { helperForceOpen = !helperForceOpen }
+
+        // ---- licence: trial / active / expired, device code, activation ----
+        val licCard = card()
+        licLine = text(licCard, "", 14f)
+        licBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        licCard.addView(licBox)
+        val dev = License.deviceCode(this)
+        text(licBox, "Код телефона (надішліть власнику) · Device code (send to the owner):", 12f, color = GREY)
+        text(licBox, dev, 20f, true, GREEN).apply {
+            setTextIsSelectable(true)
+            setOnClickListener {
+                getSystemService(android.content.ClipboardManager::class.java)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("TeslaDroid device", dev))
+                Toast.makeText(this@MainActivity, "Скопійовано · Copied", Toast.LENGTH_SHORT).show()
+            }
+        }
+        licField = EditText(this).apply {
+            hint = "Код активації · Activation code"; setTextColor(Color.WHITE); setHintTextColor(GREY)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
+        licBox.addView(licField)
+        button(licBox, "Активувати · Activate") {
+            val err = License.activate(this, licField.text.toString())
+            Toast.makeText(this, err ?: "✅ Активовано · Activated", Toast.LENGTH_LONG).show()
+            if (err == null) { licField.setText(""); licOpen = false }
+        }
+        licLine.setOnClickListener { licOpen = !licOpen }
 
         // ---- the big start / stop button ----
         bigButton = ImageView(this).apply {
@@ -199,6 +230,13 @@ class MainActivity : Activity() {
             return
         }
         Config.setIp(this, ip)
+        // Licence: only a new Start is refused, never a running session.
+        val lic = License.state(this)
+        if (!lic.canStart) {
+            licOpen = true
+            Toast.makeText(this, "Потрібен код активації · Activation code needed — ${(lic as License.State.Expired).why}", Toast.LENGTH_LONG).show()
+            return
+        }
         // Like ATTD's «Старт»: bring the helper up too if it is not running and the phone is on Wi‑Fi.
         if (Config.paired(this) && helperLine == null && phoneOnWifi()) {
             helperMsg = "…"
@@ -301,7 +339,20 @@ class MainActivity : Activity() {
         touchBox.visibility = if (touch) View.GONE else View.VISIBLE
 
         refreshHelper()
+        refreshLicence()
         if (advanced.visibility == View.VISIBLE) refreshAdvanced()
+    }
+
+    private fun refreshLicence() {
+        val st = License.state(this)
+        val df = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.US)
+        licLine.text = when (st) {
+            is License.State.Trial -> "🕐 Пробний період: ще ${st.daysLeft} дн. · Trial: ${st.daysLeft} days left ▸"
+            is License.State.Active -> if (st.untilMs == null) "✅ Активовано · Activated" else
+                "✅ Активно до ${df.format(java.util.Date(st.untilMs - 1))} · Active until ${df.format(java.util.Date(st.untilMs - 1))}"
+            is License.State.Expired -> "⛔ ${st.why} — потрібен код · activation code needed ▾"
+        }
+        licBox.visibility = if (licOpen || st is License.State.Expired) View.VISIBLE else View.GONE
     }
 
     // ---------- step 1: guided setup ----------

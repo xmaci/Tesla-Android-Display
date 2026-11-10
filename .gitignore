@@ -1,2 +1,6 @@
 tools/probe-server/results/
 __pycache__/
+
+# Private signing key and its password: never commit
+android/keystore/release.keystore
+android/keystore.properties

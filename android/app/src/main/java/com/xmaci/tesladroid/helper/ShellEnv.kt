@@ -94,6 +94,8 @@ object ShellEnv {
  * Android 14+ keeps the display tokens in services.jar (DisplayControl).
  */
 object Panel {
+    // Runs only inside the helper (app_process as the shell user), where hidden APIs are not blocked.
+    @android.annotation.SuppressLint("BlockedPrivateApi", "DiscouragedPrivateApi", "PrivateApi")
     private fun tokens(): List<android.os.IBinder> {
         val sc = Class.forName("android.view.SurfaceControl")
         if (android.os.Build.VERSION.SDK_INT >= 34) {

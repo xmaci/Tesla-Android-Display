@@ -276,7 +276,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         getSystemService(DisplayManager::class.java).registerDisplayListener(rotationListener, captureHandler)
 
         server = CarServer({ name -> try { assets.open(name).use { it.readBytes() } } catch (_: java.io.IOException) { null } },
-            this, { Log.i(TAG, it) }).also {
+            this, { Log.i(TAG, it) },
+            { local -> local == Config.ip(this) || local.startsWith("127.") || local == "::1" || local == "::ffff:127.0.0.1" }).also {
             instanceServer = it
             if (!it.start()) throw IllegalStateException("server: ${it.lastError}")
             serverPort = it.port

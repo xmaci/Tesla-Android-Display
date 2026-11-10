@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.3"
+        const val VERSION = "0.13.4"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -424,9 +424,8 @@ class MainActivity : Activity() {
         val adb = (dev && wirelessDebuggingOn()) || skipped(2)   // the setting stays 1 even with Developer options off
         return listOf(
             Step(dev, "Режим розробника · Developer options",
-                "Потрібні налаштування Android ховає в «Параметрах розробника». Кнопка відкриє «Про телефон»: " +
-                "натисніть «Номер збірки» 7 разів поспіль і введіть PIN, потім поверніться сюди.\n" +
-                "Open About phone, tap «Build number» 7 times, enter your PIN, come back.",
+                "Потрібні налаштування Android ховає в «Параметрах розробника». Кнопка відкриє «Про телефон».\n" +
+                buildNumberWhere() + "\nПотім введіть PIN і поверніться сюди · Then enter your PIN and come back.",
                 "Відкрити «Про телефон» · Open About phone"),
             Step(wifi || helper || skipped(1), "Wi‑Fi",
                 "Бездротове налагодження працює лише тоді, коли телефон підключений до Wi‑Fi (вдома). Роздачу на цей час вимкніть.\n" +
@@ -448,10 +447,25 @@ class MainActivity : Activity() {
                 "Запустити помічника · Start helper"))
     }
 
+    private fun brand() = (android.os.Build.MANUFACTURER ?: "").lowercase()
+    private fun isXiaomi() = brand().let { it.contains("xiaomi") || it.contains("redmi") || it.contains("poco") }
+
+    /** Where the 7 taps go, by maker (the row is not in the same place everywhere). */
+    private fun buildNumberWhere(): String = when {
+        isXiaomi() -> "Xiaomi / Redmi / POCO: «Версія MIUI» або «Версія HyperOS» — плитка вгорі екрана, натисніть її 7 разів · " +
+            "tap «MIUI / HyperOS version» (top tile) 7 times."
+        brand().contains("samsung") -> "Samsung: «Відомості про ПЗ» → «Номер збірки», натисніть 7 разів · " +
+            "Software information → Build number, tap 7 times."
+        brand().let { it.contains("oneplus") || it.contains("oppo") || it.contains("realme") } ->
+            "OnePlus / Oppo / Realme: «Версія» → «Номер збірки», натисніть 7 разів · Version → Build number, tap 7 times."
+        else -> "Прокрутіть у самий низ, «Номер збірки» — натисніть 7 разів · Scroll to the bottom, tap «Build number» 7 times."
+    }
+
     private fun stepAction(k: Int) {
         when (k) {
+            // Xiaomi: the row is at the top, where the hint notification would cover it — no hint there.
             0 -> openSettings(Settings.ACTION_DEVICE_INFO_SETTINGS, "build_number",
-                "Натисніть «Номер збірки» 7 разів · Tap «Build number» 7 times")
+                if (isXiaomi()) "" else buildNumberWhere())
             1 -> openSettings(Settings.ACTION_WIFI_SETTINGS, null, "Підключіться до Wi‑Fi · Connect to Wi‑Fi")
             2 -> openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless",
                 "Увімкніть «Бездротове налагодження» · Turn on Wireless debugging")

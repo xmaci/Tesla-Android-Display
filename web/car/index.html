@@ -74,7 +74,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.11.4</div>
+  <div id="ver">v0.12.0</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
@@ -83,15 +83,17 @@
 <div id="panel">
   <div class="row"><div class="lbl">Екран · Screen</div><div id="optD"></div>
     <div class="hint" id="carRes">Авто = окремий екран у формі авто, телефон можна заблокувати (потрібен помічник) · Car = its own car-shaped screen, the phone can stay locked (needs the helper)</div></div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Статистика (fps, затримка) і профіль 5s · Stats</div><div id="optT"></div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Розмір екрана «Авто» · Car screen size</div><div id="optZ"></div>
-    <div class="hint">Весь = розмір браузера, найчіткіше (Intel) · Full = browser size, sharpest (Intel) · MCU1: 640×720</div></div>
+    <div class="hint" id="zHint">Легкий = MCU1 · Середній = Intel · Повний = область браузера 1:1 · Чіткий = ×dpr (найважчий)</div></div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Орієнтація · Orientation</div><div id="optR"></div>
+    <div class="hint">Авто = за формою браузера (Model S/X — вертикально) · горизонтально 16:9 — для відео</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Масштаб · Scale</div><div id="optY"></div>
     <div class="hint">розмір іконок і тексту в програмах · size of icons and text in apps</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Панель · Panel</div><div id="optP"></div>
     <div class="hint">дві = улюблені + останні окремо · two = favourites and recents apart · ★ закріпити: довге натискання на екрані програм · pin: long press on the apps screen</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Позиція панелі · Panel position</div><div id="optO"></div>
     <div class="hint" id="posHint"></div></div>
-  <div class="row carOnly" style="display:none"><div class="lbl">Верхній рядок (↻, 5s, статистика) · Top bar</div><div id="optT"></div></div>
   <div class="row carOnly" id="appsRow" style="display:none"><div class="lbl">Програми · Apps</div>
     <button id="bApps">Показати · Show</button><div id="appList"></div></div>
   <button id="bAdv">Зображення · Picture ▸</button>
@@ -146,7 +148,8 @@
     f: ['a', '5', '10', '15', '20', '30', '0'],
     b: ['0', '1', '2', 'a'],
     d: ['phone', 'car'],
-    z: ['full', '640x720', '800x480', '1024x600'],
+    z: ['s', 'm', 'f', 'x'],
+    r: ['auto', 'port', 'land'],
     y: ['s', 'm', 'l'],
     p: ['one', 'two', 'off'],
     o: ['auto', 'bottom', 'left', 'right'],
@@ -164,7 +167,8 @@
     f: param('fps') || load('f3', '15'),         // MJPEG frame cap; 0 = none, a = follow the car's load
     b: param('buf') || load('b', '0'),          // frame buffer in canvas views: 0 off, 1, 2, a = auto
     d: param('screen') || load('d', 'phone'),   // phone = mirror the phone, car = car-shaped screen of its own
-    z: load('z', mcu1 ? '640x720' : 'full'),     // car screen size: full = browser area 1:1
+    z: load('z', mcu1 ? 's' : 'm'),             // car screen size: share of the browser area (see carScreen)
+    r: load('r', 'auto'),                       // car screen orientation
     y: load('y', 'm'),                          // car screen scale (icons/text)
     p: load('p', 'one'),                        // car panel: one, two (favourites / recents apart), off
     o: load('o', 'auto'),                       // panel position: auto = bottom on a squarish/tall browser, else left
@@ -172,6 +176,7 @@
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
+  if (OPT.z.indexOf(set.z) < 0) { set.z = mcu1 ? 's' : 'm'; }      // old saved sizes (640x720, full…)
   var mj = document.getElementById('mj'), mjOn = false;
   function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
   var frameW = 0, frameH = 0;
@@ -195,11 +200,19 @@
   // display whatever the frame size: 1 dp ≈ k CSS px after the frame is fitted to this area.
   function carScreen() {
     var vw = wrap.clientWidth || 800, vh = wrap.clientHeight || 480, dpr = window.devicePixelRatio || 1, w, h;
-    if (set.z === 'full') {
-      var f = Math.min(1, 1600 / (vw * dpr), 1600 / (vh * dpr));
-      w = Math.round(vw * dpr * f); h = Math.round(vh * dpr * f);
-    } else { var p = set.z.split('x'); w = +p[0]; h = +p[1]; }
+    // Share of the browser area in CSS px. Measured: Model S Intel area 856×1096 at dpr 1.38 — the old
+    // "×dpr" size made a 1180×1400 screen (1.65 MP, 6.6 MB per raw frame): the lag. Medium ≈ 685×810.
+    var f = set.z === 's' ? 0.55 : set.z === 'm' ? 0.8 : set.z === 'x' ? dpr : 1;
+    var o = set.r === 'auto' ? (vh >= vw ? 'port' : 'land') : set.r;
+    if (o === 'land' && vh > vw) { w = vw; h = vw * 0.5625; }                   // tall area, landscape: 16:9 across
+    else if (o === 'port' && vw > vh) { h = vh; w = vh * 0.75; }                // wide area, portrait: 3:4 over the height
+    else { w = vw; h = vh; }
+    w = w * f; h = h * f;
+    var cap = Math.min(1, 1600 / Math.max(w, h));
+    w = Math.round(w * cap); h = Math.round(h * cap);
     w -= w % 2; h -= h % 2;
+    var zh = document.getElementById('zHint');
+    if (zh) { zh.innerHTML = '→ ' + w + '×' + h + ' · Легкий = MCU1 · Середній = Intel · Повний = браузер 1:1 · Чіткий = ×dpr (найважчий)'; }
     var k = set.y === 's' ? 1.2 : set.y === 'l' ? 1.9 : 1.5;
     var shown = Math.min(vw / w, vh / h);
     var dpi = Math.max(90, Math.min(480, Math.round(160 * k / shown)));
@@ -273,7 +286,7 @@
     if (key === 's') { applyScaling(); return; }
     if (key === 'b') { tick(); return; }
     if (key === 'd') { sendMode(); return; }
-    if (key === 'z' || key === 'y') { sendCs(); return; }
+    if (key === 'z' || key === 'y' || key === 'r') { sendCs(); return; }
     if (key === 'p' || key === 'o' || key === 't') { applyDock(); return; }
     sendCfgSoon();
   }
@@ -285,11 +298,12 @@
   buildOptions('f', 'optF', function (v) { return v === '0' ? '∞' : v === 'a' ? 'Auto' : v; });
   buildOptions('b', 'optB', function (v) { return v === '0' ? 'Off' : v === 'a' ? 'Auto' : v; });
   buildOptions('d', 'optD', function (v) { return v === 'car' ? 'Авто · Car' : 'Телефон · Phone'; });
-  buildOptions('z', 'optZ', function (v) { return v === 'full' ? 'Весь · Full' : v.replace('x', '×'); });
+  buildOptions('z', 'optZ', function (v) { return { s: 'Легкий · Light', m: 'Середній · Medium', f: 'Повний · Full', x: 'Чіткий · Sharp' }[v]; });
+  buildOptions('r', 'optR', function (v) { return { auto: 'Авто', port: 'Вертикально · Portrait', land: 'Горизонтально · Landscape' }[v]; });
   buildOptions('y', 'optY', function (v) { return v.toUpperCase(); });
   buildOptions('p', 'optP', function (v) { return v === 'one' ? 'Одна · One' : v === 'two' ? 'Дві · Two' : 'Вимк · Off'; });
   buildOptions('o', 'optO', function (v) { return { auto: 'Авто', bottom: 'Знизу · Bottom', left: 'Зліва · Left', right: 'Справа · Right' }[v]; });
-  buildOptions('t', 'optT', function (v) { return v === 'on' ? 'Показувати · Show' : 'Авто · Auto'; });
+  buildOptions('t', 'optT', function (v) { return v === 'on' ? 'Показати · Show' : 'Сховати · Hide'; });
   carRows();
 
   // The car screen failed: say why, big, over the picture (the top bar with the status may be hidden).
@@ -481,7 +495,7 @@
       s.style.left = left + 'px'; s.style.top = top + 'px';
       if (v !== 'img') { s.style.display = 'none'; }
     }
-    sendVp(); if (set.z === 'full') { sendCs(); }
+    sendVp(); sendCs();
     // A resized canvas is blank: ask the phone for a complete frame.
     if (!isMj() && (canvas.width !== oldW || canvas.height !== oldH || v === 'img')) { askFull(); }
   }
@@ -753,7 +767,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.11.4 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.12.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',

@@ -56,8 +56,9 @@ class PairingService : Service() {
             }
         }
         state = "waiting for pairing code dialog"
-        startForeground(NOTIF_ID, notify("Відкрийте «Сполучити пристрій за кодом» · Open \"Pair device with pairing code\"", false),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        val first = notify("Відкрийте «Сполучити пристрій за кодом» · Open \"Pair device with pairing code\"", false)
+        startForeground(NOTIF_ID, first, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, first)
         if (mdns == null) {
             mdns = AdbMdns(this, AdbMdns.SERVICE_TYPE_TLS_PAIRING) { addr, p ->
                 if (addr != null && p > 0) {
@@ -112,6 +113,8 @@ class PairingService : Service() {
             .setContentTitle("TeslaDroid · Wireless debugging")
             .setContentText(text)
             .setOngoing(true)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .addAction(Notification.Action.Builder(null, "Скасувати · Cancel",
                 PendingIntent.getService(this, 2, Intent(this, PairingService::class.java).setAction(ACTION_STOP),
                     PendingIntent.FLAG_IMMUTABLE)).build())

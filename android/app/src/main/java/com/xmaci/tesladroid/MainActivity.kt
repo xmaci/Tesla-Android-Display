@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.8"
+        const val VERSION = "0.13.9"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -431,6 +431,29 @@ class MainActivity : Activity() {
         catch (_: Exception) { openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless", hint) }
     }
 
+    private fun notificationsOn(): Boolean =
+        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED &&
+            getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
+
+    private fun openNotificationSettings() {
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) &&
+            !getSharedPreferences("tesladroid", MODE_PRIVATE).getBoolean("notif_asked", false)) {
+            getSharedPreferences("tesladroid", MODE_PRIVATE).edit().putBoolean("notif_asked", true).apply()
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9); return
+        }
+        // Refused before: Android will not ask again, so open the app's notification settings.
+        startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+    }
+
+    /** Live pairing state under step 4, so it is clear what the app is waiting for. */
+    private fun pairingStateLine(): String = when {
+        PairingService.state.startsWith("waiting") -> "\n⏳ Чекаю на вікно з кодом (Pair device with pairing code)… · Waiting for the code window…"
+        PairingService.state.startsWith("pairing port") -> "\n✋ Вікно знайдено — введіть 6 цифр у сповіщенні TeslaDroid (шторка) · Found — enter the code in the notification"
+        PairingService.state.isNotEmpty() -> "\n" + PairingService.state.lineSequence().first()
+        else -> ""
+    }
+
     private fun startPairing() {
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
@@ -460,10 +483,14 @@ class MainActivity : Activity() {
                 "Turn on «Wireless debugging», tick «Always allow on this network», tap Allow.",
                 "Відкрити й увімкнути · Open and turn on"),
             Step(paired, "Сполучення · Pairing",
-                "Кнопка відкриє «Бездротове налагодження». Натисніть там «Сполучити пристрій за допомогою коду» — з'являться 6 цифр. " +
-                "Потягніть шторку вниз і введіть їх у сповіщення TeslaDroid.\n" +
-                "Tap «Pair device with pairing code», then type the 6 digits into the TeslaDroid notification.",
-                "Сполучити · Pair"),
+                if (!notificationsOn())
+                    "⚠ Сповіщення TeslaDroid вимкнені — код сполучення вводиться саме в сповіщенні. Натисніть кнопку й увімкніть їх.\n" +
+                    "⚠ TeslaDroid notifications are off — the pairing code is typed into a notification. Turn them on."
+                else "Кнопка відкриє «Бездротове налагодження». Натисніть там «Сполучити пристрій за допомогою коду» — з'являться 6 цифр, " +
+                    "вікно не закривайте. Потягніть шторку вниз і в сповіщенні TeslaDroid натисніть «Ввести код».\n" +
+                    "Tap «Pair device with pairing code», keep that window open, pull down the shade, tap «Enter code» in the TeslaDroid notification." +
+                    pairingStateLine(),
+                if (!notificationsOn()) "Дозволити сповіщення · Allow notifications" else "Сполучити · Pair"),
             Step(helper, "Помічник · Helper",
                 "Після сполучення помічник запускається сам за кілька секунд. Якщо ні — натисніть кнопку.\n" +
                 "After pairing the helper starts by itself. If not, tap the button.",
@@ -490,7 +517,7 @@ class MainActivity : Activity() {
             1 -> openSettings(Settings.ACTION_WIFI_SETTINGS, null, "Підключіться до Wi‑Fi · Connect to Wi‑Fi")
             2 -> openWirelessDebugging("Увімкніть перемикач угорі, «Завжди дозволяти в цій мережі» → «Дозволити» · " +
                 "Turn on the switch at the top, always allow on this network")
-            3 -> startPairing()
+            3 -> if (!notificationsOn()) openNotificationSettings() else startPairing()
             4 -> { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
         }
     }

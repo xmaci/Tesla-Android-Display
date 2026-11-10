@@ -93,10 +93,20 @@ object Helper {
             ping(ctx)?.let { return "running: $it\n— попередній запуск · last run —\n${prev.takeLast(450)}" }
             Thread.sleep(250)
         }
-        // Not answering: show what happened (the log is only readable by the shell user).
-        val diag = runShell(adb, "id; echo ---; cat /data/local/tmp/tesladroid-helper.log 2>&1 | tail -c 600; " +
-            "echo ---; ps -A -o PID,ARGS 2>/dev/null | grep -i -e tesladroid -e app_process | grep -v grep", 2500)
-        return "helper did not answer.\nlaunch: ${launch.trim().ifEmpty { "(no output)" }}\n${diag.trim().take(900)}"
+        // Not answering: show what happened. The detached copy's log may be empty, so also run the helper
+        // in the foreground for 4 s and capture everything it prints (the real error, if it dies).
+        val diag = runShell(adb, "cat /data/local/tmp/tesladroid-helper.log 2>&1 | tail -c 500; echo ---ps; " +
+            "ps -A -o PID,ARGS 2>/dev/null | grep -e HelperMain | grep -v grep; echo ---port; " +
+            "(ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep 7790", 2500)
+        val fg = runShell(adb, "pkill -f tesladroid.helper.HelperMain; sleep 0.3; " +
+            "CLASSPATH=$apk timeout 4 app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)} 2>&1 | tail -c 1500; " +
+            "echo \"exit=\$?\"", 6500)
+        // The foreground run was stopped by timeout: start the detached helper again for real use.
+        runShell(adb, "CLASSPATH=$apk setsid app_process /system/bin ${HelperMain::class.java.name} ${token(ctx)}" +
+            " >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null & echo launched", 1500)
+        repeat(20) { ping(ctx)?.let { return "running: $it (slow start)" }; Thread.sleep(250) }
+        return "helper did not answer.\nlaunch: ${launch.trim().ifEmpty { "(no output)" }}\n" +
+            "log/ps/port:\n${diag.trim().take(600)}\n— foreground run —\n${fg.trim().take(1500)}"
     }
 
     /**

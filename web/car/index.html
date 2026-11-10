@@ -74,7 +74,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.13.10</div>
+  <div id="ver">v0.13.11</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
@@ -767,7 +767,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.13.10 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.13.11 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',

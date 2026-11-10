@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.5"
+        const val VERSION = "0.13.6"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -111,7 +111,7 @@ class MainActivity : Activity() {
 
         // ---- step 1: the helper (once; afterwards it starts itself on Wi‑Fi) ----
         val helperCard = card()
-        text(helperCard, "Крок 1 · Помічник · Step 1 · Helper", 16f, true)
+        text(helperCard, "Підготовка телефона (один раз) · Phone setup (once)", 16f, true)
         helperStatus = text(helperCard, "", 14f)
         helperBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         helperCard.addView(helperBox)
@@ -485,7 +485,7 @@ class MainActivity : Activity() {
         }
         for ((k, x) in st.withIndex()) {
             val now = k == current
-            stepTitle[k].text = (if (x.done) "✅ " else if (now) "👉 " else "⬜ ") + "${k + 1}. ${x.title}"
+            stepTitle[k].text = (if (x.done) "✅ " else if (now) "👉 " else "⬜ ") + "${k + 1} з ${st.size} · ${x.title}"
             stepTitle[k].setTextColor(if (x.done || now) Color.WHITE else GREY)
             stepDesc[k].text = x.what
             stepDesc[k].visibility = if (now) View.VISIBLE else View.GONE
@@ -504,7 +504,7 @@ class MainActivity : Activity() {
         helperStatus.text = when {
             ok && !helperForceOpen -> "✅ Помічник працює, автозапуск на Wi‑Fi увімкнено · Helper running, auto start on ▸"
             helperLine != null -> "✅ Помічник працює · Helper running"
-            else -> "❌ Помічник не запущено — виконайте кроки нижче · Helper not running — do the steps below"
+            else -> "❌ Помічник ще не запущено — пройдіть кроки нижче · Helper not running yet — follow the steps below"
         }
         helperFoot.text = (if (AutoHelperJob.canAutoStart(this)) "🔁 автозапуск на Wi‑Fi увімкнено · auto start on Wi‑Fi on"
                      else "⚪ автозапуск з'явиться після першого запуску · auto start comes after the first start") +

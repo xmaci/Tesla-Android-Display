@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.11.2"
+        const val VERSION = "0.11.3"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -65,6 +65,8 @@ class MainActivity : Activity() {
     private lateinit var pairBtn: View
     private lateinit var helperBox: LinearLayout
     private var helperForceOpen = false
+    private lateinit var setupSteps: TextView
+    private lateinit var setupBtn: View
     private lateinit var startHelperBtn: View
     private lateinit var diag: TextView
     @Volatile private var helperMsg = ""
@@ -107,25 +109,13 @@ class MainActivity : Activity() {
         helperStatus = text(helperCard, "", 14f)
         helperBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         helperCard.addView(helperBox)
-        text(helperBox, "Один раз, вдома на Wi‑Fi (роздачу вимкнути):\n" +
-            "1) Параметри розробника → Бездротове налагодження: увімкнути, «Завжди дозволяти в цій мережі».\n" +
-            "2) «Сполучити» → «Сполучити пристрій за допомогою коду» → 6 цифр у сповіщення TeslaDroid.\n" +
-            "Помічник запуститься сам — і далі після кожного перезавантаження, коли телефон на Wi‑Fi.\n" +
-            "Once, at home on Wi‑Fi (hotspot off): Developer options → Wireless debugging on (always allow on this network) → " +
-            "Pair (6 digits into the TeslaDroid notification). The helper starts by itself, and again after every reboot on Wi‑Fi.",
+        setupSteps = text(helperBox, "", 14f)
+        // One button that always leads to the next missing step, opening the right settings screen.
+        setupBtn = button(helperBox, "") { nextSetupStep() }
+        pairBtn = button(helperBox, "Сполучити знову · Pair again") { startPairing() }
+        text(helperBox, "Один раз, вдома на Wi‑Fi. Далі помічник запускається сам після кожного перезавантаження, " +
+            "коли телефон на Wi‑Fi. · Once, at home on Wi‑Fi; afterwards the helper starts by itself after every reboot on Wi‑Fi.",
             12f, color = GREY)
-        button(helperBox, "Параметри розробника · Developer options") {
-            try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
-            catch (_: Exception) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
-        }
-        pairBtn = button(helperBox, "Сполучити · Pair (Wireless debugging)") {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
-            }
-            PairingService.start(this)
-            try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
-            catch (_: Exception) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
-        }
         // Only needed when pairing worked but the helper did not come up (shown then).
         startHelperBtn = button(helperBox, "Запустити помічника · Start helper") { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
         // Tap the status to show the steps again even when everything works.
@@ -314,17 +304,74 @@ class MainActivity : Activity() {
         if (advanced.visibility == View.VISIBLE) refreshAdvanced()
     }
 
+    // ---------- step 1: guided setup ----------
+
+    private fun devOptionsOn() = Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+    private fun wirelessDebuggingOn() = Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
+
+    /** Opens a settings screen with one row highlighted (the same extras Shizuku uses). */
+    private fun openSettings(action: String, highlight: String?, hint: String) {
+        val i = Intent(action)
+        if (highlight != null) {
+            i.putExtra(":settings:fragment_args_key", highlight)
+            i.putExtra(":settings:show_fragment_args", android.os.Bundle().apply { putString(":settings:fragment_args_key", highlight) })
+        }
+        try { startActivity(i) } catch (_: Exception) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        Toast.makeText(this, hint, Toast.LENGTH_LONG).show()
+    }
+
+    private fun startPairing() {
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
+        }
+        PairingService.start(this)
+        openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless",
+            "«Бездротове налагодження» → «Сполучити пристрій за допомогою коду» → 6 цифр у сповіщення TeslaDroid · " +
+            "Wireless debugging → Pair device with pairing code → 6 digits into the TeslaDroid notification")
+    }
+
+    private fun nextSetupStep() {
+        when {
+            !devOptionsOn() -> openSettings(Settings.ACTION_DEVICE_INFO_SETTINGS, "build_number",
+                "Натисніть «Номер збірки» 7 разів, потім поверніться сюди · Tap «Build number» 7 times, then come back")
+            !phoneOnWifi() -> openSettings(Settings.ACTION_WIFI_SETTINGS, null,
+                "Підключіться до Wi‑Fi (роздачу вимкніть) · Connect to Wi‑Fi (hotspot off)")
+            !wirelessDebuggingOn() -> openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless",
+                "Увімкніть «Бездротове налагодження», «Завжди дозволяти в цій мережі» · " +
+                "Turn on Wireless debugging, always allow on this network")
+            else -> startPairing()
+        }
+    }
+
+    private fun refreshSetup() {
+        val dev = devOptionsOn(); val wifi = phoneOnWifi(); val adb = wirelessDebuggingOn(); val paired = Config.paired(this)
+        fun m(ok: Boolean) = if (ok) "✅" else "⬜"
+        setupSteps.text = "${m(dev)} 1. Режим розробника · Developer options\n" +
+            "${m(wifi || paired)} 2. Wi‑Fi\n" +
+            "${m(adb || paired)} 3. Бездротове налагодження · Wireless debugging\n" +
+            "${m(paired)} 4. Сполучення · Pairing"
+        val label = when {
+            !dev -> "Увімкнути режим розробника · Turn on Developer options"
+            !wifi -> "Підключитися до Wi‑Fi · Connect to Wi‑Fi"
+            !adb -> "Увімкнути бездротове налагодження · Turn on Wireless debugging"
+            !paired -> "Сполучити · Pair"
+            else -> "Сполучити знову · Pair again"
+        }
+        (setupBtn as? android.widget.Button)?.text = label
+        // "Pair again" as its own button only once paired (the step button already pairs before that).
+        setupBtn.visibility = if (paired && dev && wifi && adb) View.GONE else View.VISIBLE
+        pairBtn.visibility = if (paired) View.VISIBLE else View.GONE
+    }
+
     private fun refreshHelper() {
+        refreshSetup()
         Thread { helperLine = Helper.ping(this) }.start()
         val ok = helperLine != null && AutoHelperJob.canAutoStart(this)
         helperBox.visibility = if (ok && !helperForceOpen) View.GONE else View.VISIBLE
         startHelperBtn.visibility = if (Config.paired(this) && (helperLine == null || helperForceOpen)) View.VISIBLE else View.GONE
-        (pairBtn as? android.widget.Button)?.text = if (Config.paired(this))
-            "Сполучити знову · Pair again (Wireless debugging)" else "Сполучити · Pair (Wireless debugging)"
         helperStatus.text = if (ok && !helperForceOpen)
             "✅ Помічник працює, автозапуск на Wi‑Fi увімкнено · Helper running, auto start on ▸"
-        else (if (Config.paired(this)) "✅ сполучено · paired\n" else "⬜ не сполучено · not paired\n") +
-            (if (helperLine != null) "✅ $helperLine" else "❌ помічник не запущено · helper not running") +
+        else (if (helperLine != null) "✅ $helperLine" else "❌ помічник не запущено · helper not running") +
             "\n" + (if (AutoHelperJob.canAutoStart(this)) "🔁 автозапуск на Wi‑Fi увімкнено · auto start on Wi‑Fi on"
                      else "⚪ автозапуск з'явиться після першого запуску · auto start comes after the first start") +
             AutoHelperJob.lastResult(this).let { if (it.isEmpty()) "" else "\n   останній автозапуск · last: $it" } +

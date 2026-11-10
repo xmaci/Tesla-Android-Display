@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.2"
+        const val VERSION = "0.13.3"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -383,7 +383,29 @@ class MainActivity : Activity() {
             i.putExtra(":settings:show_fragment_args", android.os.Bundle().apply { putString(":settings:fragment_args_key", highlight) })
         }
         try { startActivity(i) } catch (_: Exception) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
-        // No toast: it covered the very row to tap (Build number). The steps in the app explain it.
+        topHint(hint)
+    }
+
+    /**
+     * The hint as a short heads-up notification at the TOP of the screen: a toast sits at the bottom, right
+     * over «Build number», and Android no longer lets apps move toasts. Silent, gone after 12 s.
+     */
+    private fun topHint(text: String) {
+        if (text.isEmpty()) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9); return
+        }
+        val nm = getSystemService(android.app.NotificationManager::class.java)
+        nm.createNotificationChannel(android.app.NotificationChannel("hints", "Підказки · Hints",
+            android.app.NotificationManager.IMPORTANCE_HIGH).apply { setSound(null, null); enableVibration(false) })
+        nm.notify(77, android.app.Notification.Builder(this, "hints")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("TeslaDroid")
+            .setContentText(text)
+            .setStyle(android.app.Notification.BigTextStyle().bigText(text))
+            .setTimeoutAfter(12_000)
+            .setAutoCancel(true)
+            .build())
     }
 
     private fun startPairing() {
@@ -391,9 +413,8 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
         }
         PairingService.start(this)
-        openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless",
-            "«Бездротове налагодження» → «Сполучити пристрій за допомогою коду» → 6 цифр у сповіщення TeslaDroid · " +
-            "Wireless debugging → Pair device with pairing code → 6 digits into the TeslaDroid notification")
+        // no hint here: the pairing notification itself (code entry) must stay on top
+        openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, "toggle_adb_wireless", "")
     }
 
     private class Step(val done: Boolean, val title: String, val what: String, val button: String)

@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.11"
+        const val VERSION = "0.13.12"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -227,7 +227,30 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { setBackgroundColor(Color.rgb(17, 17, 17)); addView(col) })
     }
 
-    override fun onResume() { super.onResume(); ui.post(tick) }
+    override fun onResume() { super.onResume(); ui.post(tick); autoStartHelper() }
+
+    private val helperStarting = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Opening the app starts the helper by itself when it can: paired, on Wi‑Fi, helper not running.
+     * With the auto-start permission it turns Wireless debugging on and off itself; without it, only
+     * when Wireless debugging is already on.
+     */
+    private fun autoStartHelper() {
+        if (!Config.paired(this) || !phoneOnWifi()) return
+        if (!helperStarting.compareAndSet(false, true)) return
+        Thread {
+            try {
+                if (Helper.ping(this) == null) {
+                    val can = AutoHelperJob.canAutoStart(this)
+                    if (can || wirelessDebuggingOn()) {
+                        helperMsg = "⏳ Запускаю помічника… · Starting the helper…"
+                        helperMsg = if (can) AutoHelperJob.tryStart(this) else Helper.start(this)
+                    }
+                }
+            } finally { helperStarting.set(false) }
+        }.start()
+    }
     override fun onPause() { ui.removeCallbacks(tick); super.onPause() }
 
     // ---------- start / stop ----------
@@ -518,7 +541,10 @@ class MainActivity : Activity() {
             2 -> openWirelessDebugging("Увімкніть перемикач угорі, «Завжди дозволяти в цій мережі» → «Дозволити» · " +
                 "Turn on the switch at the top, always allow on this network")
             3 -> if (!notificationsOn()) openNotificationSettings() else startPairing()
-            4 -> { helperMsg = "…"; Thread { helperMsg = Helper.start(this) }.start() }
+            4 -> if (helperStarting.compareAndSet(false, true)) {
+                helperMsg = "⏳ Запускаю помічника… · Starting the helper…"
+                Thread { try { helperMsg = Helper.start(this) } finally { helperStarting.set(false) } }.start()
+            }
         }
     }
 
@@ -552,6 +578,7 @@ class MainActivity : Activity() {
         helperStatus.text = when {
             ok && !helperForceOpen -> "✅ Помічник працює, автозапуск на Wi‑Fi увімкнено · Helper running, auto start on ▸"
             helperLine != null -> "✅ Помічник працює · Helper running"
+            helperStarting.get() -> "⏳ Запускаю помічника… · Starting the helper…"
             else -> "❌ Помічник ще не запущено — пройдіть кроки нижче · Helper not running yet — follow the steps below"
         }
         helperFoot.text = (if (AutoHelperJob.canAutoStart(this)) "🔁 автозапуск на Wi‑Fi увімкнено · auto start on Wi‑Fi on"

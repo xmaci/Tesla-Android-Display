@@ -31,7 +31,10 @@ import java.net.Socket
  *   type 2 (text):  length, 0, 0 → UTF-8 line ("OK <displayId> <flags>", "launch: …", "ERR …")
  */
 class CarSession(private val sock: Socket, private val input: BufferedReader,
-                 private var w: Int, private var h: Int, private var dpi: Int, private val deco: Boolean) {
+                 private var w: Int, private var h: Int, private var dpi: Int, private val deco: Boolean,
+                 /** Mirror of the phone's own screen (display 0) instead of a separate car screen: no
+                  *  MediaProjection, so no screen-recording chip/timer and no "Share screen" dialog. */
+                 private val mirror: Boolean = false) {
 
     private companion object {
         // DisplayManager.VIRTUAL_DISPLAY_FLAG_* (several are hidden)
@@ -77,6 +80,43 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         } finally { close() }
     }
 
+    /** Display that touches and keys go to: the phone itself for a mirror. */
+    private val inputDisplay get() = if (mirror) 0 else displayId
+
+    private fun createMirror(): Boolean {
+        val r = newReader(w, h)
+        var made: VirtualDisplay? = null
+        var fail: Throwable? = null
+        val done = onMain(5000) {
+            try {
+                // Android 14+: DisplayManager.createVirtualDisplay(name, w, h, displayIdToMirror, surface) (hidden, static)
+                val m = android.hardware.display.DisplayManager::class.java.getMethod("createVirtualDisplay",
+                    String::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType, android.view.Surface::class.java)
+                made = m.invoke(null, "TeslaDroid mirror", w, h, 0, r.surface) as VirtualDisplay?
+            } catch (e: Throwable) { fail = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e }
+        }
+        val vd = made
+        if (!done || vd == null) {
+            r.close()
+            text("ERR display: mirror: ${fail?.javaClass?.simpleName ?: "timeout"} ${fail?.message ?: ""}")
+            return false
+        }
+        display = vd; reader = r; displayId = vd.display?.displayId ?: -1
+        HelperMain.log("mirror $displayId ${w}x$h")
+        text("OK $displayId mirror ${w}x$h")
+        return true
+    }
+
+    /** Car-screen pixels → phone pixels (the mirror is the phone screen fitted into w×h). */
+    private fun toPhone(x: Float, y: Float): Pair<Float, Float> {
+        val pt = android.graphics.Point()
+        @Suppress("DEPRECATION") ShellEnv.displayManager.getDisplay(0).getRealSize(pt)
+        val sc = minOf(w / pt.x.toFloat(), h / pt.y.toFloat())
+        val ox = (w - pt.x * sc) / 2; val oy = (h - pt.y * sc) / 2
+        return Pair(((x - ox) / sc).coerceIn(0f, pt.x - 1f), ((y - oy) / sc).coerceIn(0f, pt.y - 1f))
+    }
+
     private fun create(): Boolean {
         HelperMain.log("display ${w}x$h@$dpi home=$deco: system context…")
         // Built on another thread with a time limit: if Android's internals hang here, the helper
@@ -91,6 +131,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             text("ERR display: system context: $why")
             return false
         }
+        if (mirror) return createMirror()
         HelperMain.log("display: creating")
         // No PRESENTATION flag: Android shows its lock screen (clock) on every presentation display while
         // the phone is locked, which covered the launcher on the car screen.
@@ -208,9 +249,10 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             "u" -> MotionEvent.ACTION_UP
             else -> return
         }
-        val ev = MotionEvent.obtain(downTime, now, action, x.coerceIn(0f, w - 1f), y.coerceIn(0f, h - 1f), 0)
+        val (px, py) = if (mirror) toPhone(x, y) else Pair(x.coerceIn(0f, w - 1f), y.coerceIn(0f, h - 1f))
+        val ev = MotionEvent.obtain(downTime, now, action, px, py, 0)
         ev.source = InputDevice.SOURCE_TOUCHSCREEN
-        val ok = try { ShellEnv.inject(ev, displayId) } catch (t: Throwable) { text("ERR inject: ${t.javaClass.simpleName}: ${t.message}"); false }
+        val ok = try { ShellEnv.inject(ev, inputDisplay) } catch (t: Throwable) { text("ERR inject: ${t.javaClass.simpleName}: ${t.message}"); false }
         ev.recycle()
         if (kind == "u") text("touch: " + (if (ok) "ok" else "refused"))
     }
@@ -219,7 +261,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         val now = SystemClock.uptimeMillis()
         for (a in intArrayOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
             val ev = KeyEvent(now, now, a, code, 0, 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD)
-            ShellEnv.inject(ev, displayId)
+            ShellEnv.inject(ev, inputDisplay)
         }
     }
 

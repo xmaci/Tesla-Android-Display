@@ -43,7 +43,12 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
     /** Older helper: the screen works, but not with the phone locked. */
     @Volatile private var oldHelper = false
 
-    fun start(width: Int, height: Int, dpi: Int, home: Boolean) {
+    /** Mirror of the phone screen made by the helper (no MediaProjection) instead of a car screen. */
+    @Volatile var mirror = false
+        private set
+
+    fun start(width: Int, height: Int, dpi: Int, home: Boolean, mirror: Boolean = false) {
+        this.mirror = mirror
         w = width; h = height
         thread(name = "car-display", isDaemon = true) { run(width, height, dpi, home) }
     }
@@ -73,7 +78,8 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
             sock = s
             out = s.getOutputStream()
             status = "2/4 display…"
-            send("${Helper.token(ctx)} display $width $height $dpi ${if (home) 1 else 0}")
+            send(if (mirror) "${Helper.token(ctx)} mirror $width $height"
+                 else "${Helper.token(ctx)} display $width $height $dpi ${if (home) 1 else 0}")
             val input = DataInputStream(BufferedInputStream(s.getInputStream(), 1 shl 20))
             var px = ByteArray(0)
             while (!stopped) {

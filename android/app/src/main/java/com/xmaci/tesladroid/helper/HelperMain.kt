@@ -23,12 +23,13 @@ import kotlin.system.exitProcess
  *   "<token> hello"  -> "TDHELPER v=<version> uid=<uid> pid=<pid>"
  *   "<token> quit"   -> helper exits
  *   "<token> display <w> <h> <dpi> <home 1|0>" -> keeps the socket open as a CarSession
+ *   "<token> mirror <w> <h>" -> the same for a mirror of the phone screen (v9, Android 14+)
  *   "<token> upgrade <apk path>" -> starts the helper from a newer app version and exits (v3+), so
  *                                   app updates don't need Wireless debugging / Wi‑Fi again
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 8
+    const val VERSION = 9
 
     private var server: ServerSocket? = null
 
@@ -90,6 +91,14 @@ object HelperMain {
                         .redirectErrorStream(true).start()
                     Thread.sleep(200)
                     exitProcess(0)
+                }
+                "mirror" -> {
+                    // mirror <w> <h>: the phone's own screen, captured by the shell user (no MediaProjection)
+                    sock.soTimeout = 0
+                    sock.tcpNoDelay = true
+                    keep = true
+                    CarSession(sock, reader, parts[2].toInt(), parts[3].toInt(), 160, false, mirror = true).run()
+                    return
                 }
                 "display" -> {
                     // display <w> <h> <dpi> <home 1|0>; the session owns the socket until the app closes it

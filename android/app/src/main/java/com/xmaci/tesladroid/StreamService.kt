@@ -99,6 +99,17 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         @Volatile var carStatus = ""
             private set
 
+        const val EXTRA_HELPER = "helper"
+
+        /** Helper v9+ on Android 14+: stream without MediaProjection (no recording chip, no dialog). */
+        fun canStreamWithHelper(helperLine: String?): Boolean =
+            android.os.Build.VERSION.SDK_INT >= 34 &&
+                (Regex("v=(\\d+)").find(helperLine ?: "")?.groupValues?.get(1)?.toIntOrNull() ?: 0) >= 9
+
+        fun startWithHelper(ctx: Context) {
+            ctx.startForegroundService(Intent(ctx, StreamService::class.java).putExtra(EXTRA_HELPER, true))
+        }
+
         fun start(ctx: Context, code: Int, data: Intent) {
             ctx.startForegroundService(Intent(ctx, StreamService::class.java)
                 .putExtra(EXTRA_CODE, code).putExtra(EXTRA_DATA, data))
@@ -227,6 +238,15 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         if (intent?.action == ACTION_STOP) {
             shutdown(); stopSelf(); return START_NOT_STICKY
         }
+        if (intent?.getBooleanExtra(EXTRA_HELPER, false) == true) {
+            // No screen capture at all: the helper makes the picture (no recording chip, no dialog).
+            startForeground(NOTIF_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            if (running) return START_NOT_STICKY
+            try { beginHelper() } catch (t: Throwable) {
+                Log.e(TAG, "start failed", t); status = "error: ${t.message}"; shutdown(); stopSelf()
+            }
+            return START_NOT_STICKY
+        }
         // Android 14+: the mediaProjection foreground service must be running first.
         startForeground(NOTIF_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         val code = intent?.getIntExtra(EXTRA_CODE, Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
@@ -271,6 +291,18 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         display = mp.createVirtualDisplay("TeslaDroid", w, h, dpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, r.surface, null, captureHandler)
 
+        startCommon()
+    }
+
+    /** Started without MediaProjection: the phone mirror comes from the helper too. */
+    private fun beginHelper() {
+        readScreenSize()
+        helperMode = true
+        startCommon()
+        startMirror()
+    }
+
+    private fun startCommon() {
         // Phone rotated (e.g. Waze in landscape): follow it, so a landscape screen fills the car's wide
         // browser area instead of being letterboxed into a portrait frame.
         getSystemService(DisplayManager::class.java).registerDisplayListener(rotationListener, captureHandler)
@@ -296,7 +328,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         override fun onDisplayAdded(id: Int) {}
         override fun onDisplayRemoved(id: Int) {}
         override fun onDisplayChanged(id: Int) {
-            if (id != Display.DEFAULT_DISPLAY || carMode) return
+            if (id != Display.DEFAULT_DISPLAY) return
+            if (car?.mirror == true) {          // helper mirror: follow the phone's rotation
+                val oldW = screenW; val oldH = screenH
+                readScreenSize()
+                if ((oldW > oldH) != (screenW > screenH)) { val (w, h) = frameSize(wantWidth); car?.resize(w, h, 160) }
+                return
+            }
+            if (carMode) return
             val oldW = screenW; val oldH = screenH
             readScreenSize()
             if ((oldW > oldH) != (screenW > screenH)) {
@@ -330,7 +369,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     /** Car asked for a different width: resize the virtual display onto a new reader. */
     private fun resize(width: Int) {
-        if (carMode) { car?.let { val (w, h, d) = carSize(); it.resize(w, h, d) }; return }
+        if (carMode) {
+            car?.let { if (it.mirror) { val (w, h) = frameSize(width); it.resize(w, h, 160) } else { val (w, h, d) = carSize(); it.resize(w, h, d) } }
+            return
+        }
         captureHandler.post {
             val (w, h) = frameSize(width)
             if (w == frameW && h == frameH) return@post
@@ -674,11 +716,12 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             "t" -> touch(conn, p)
             "k" -> {
                 val k = p.getOrNull(1) ?: ""; val c = car
-                if (carMode && c != null && k == "home") { carLaunch = ""; c.launch(CAR_HOME) }   // our home: the system one locks with the phone
+                if (carMode && c != null && k == "home" && !c.mirror) { carLaunch = ""; c.launch(CAR_HOME) }   // our home: the system one locks with the phone
                 else if (carMode && c != null && k != "notifications") c.key(k)
                 else TouchService.instance?.key(k)
             }
-            "mode" -> if (p.getOrNull(1) == "car") startCar() else stopCar()
+            "mode" -> if (p.getOrNull(1) == "car") startCar()
+                else if (car?.mirror != true) { stopCar(); if (helperMode) startMirror() }
             "vp" -> {
                 val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
                 if (w >= 100 && h >= 100 && (w != vpW || h != vpH)) { vpW = w; vpH = h; if (carMode) resize(wantWidth) }
@@ -692,7 +735,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 val d = p.getOrNull(3)?.toIntOrNull() ?: 0
                 if (w in 160..2560 && h in 160..2560 && d in 80..640 && (w != csW || h != csH || d != csDpi)) {
                     csW = w; csH = h; csDpi = d
-                    car?.resize(w, h, d)
+                    car?.let { if (!it.mirror) it.resize(w, h, d) }
                 }
             }
             "launch" -> {
@@ -774,8 +817,18 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         if (carMode && !carConnected && panelOff) { panelOff = false; car?.phone(true) }
     }
 
+    /** Started via the helper (no MediaProjection): the phone screen is a helper mirror session. */
+    @Volatile private var helperMode = false
+
+    @Synchronized private fun startMirror() {
+        if (car != null) return
+        val (w, h) = frameSize(wantWidth)
+        car = CarDisplay(this, this).also { it.start(w, h, 160, false, mirror = true) }
+        synchronized(lock) { forceFull = true; sentCaptureSeq = 0 }
+    }
+
     @Synchronized private fun startCar() {
-        car?.let { if (it.status.startsWith("✗")) stopCar() else return }   // a failed attempt is retried
+        car?.let { if (it.mirror) stopCar() else if (it.status.startsWith("✗")) stopCar() else return }   // failed attempt: retry
         // carMode (and pausing the phone mirror) waits for the first car frame: if the helper is missing
         // or fails, the car keeps seeing the phone instead of a frozen picture.
         val (w, h, d) = carSize()
@@ -825,13 +878,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         if (car !== display) return
         val st = display.status
         stopCar()
+        if (helperMode && !display.mirror) startMirror()     // car screen failed: show the phone again
         carStatus = st
         conn?.sendText("cd:" + st + " — показую телефон · showing the phone")
     }
 
     override fun onCarText(line: String) {
         // The display is ready: open the last app again (the screen is new and empty without a launcher).
-        if (line.startsWith("OK ")) {
+        if (line.startsWith("OK ") && car?.mirror != true) {
             car?.launch(CAR_HOME)
             if (carLaunch.isNotEmpty() && carLaunch != CAR_HOME) car?.launch(carLaunch)
         }

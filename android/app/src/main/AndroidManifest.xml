@@ -64,7 +64,11 @@
         <service
             android:name=".StreamService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Shows the phone screen in the car browser via the shell helper, without screen capture" />
+        </service>
 
         <!-- Gives the phone a public-looking address the Tesla browser accepts -->
         <service

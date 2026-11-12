@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.13.13"
+        const val VERSION = "0.14.0"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -237,11 +237,16 @@ class MainActivity : Activity() {
      * when Wireless debugging is already on.
      */
     private fun autoStartHelper() {
-        if (!Config.paired(this) || !phoneOnWifi()) return
+        if (!Config.paired(this)) return
         if (!helperStarting.compareAndSet(false, true)) return
         Thread {
             try {
-                if (Helper.ping(this) == null) {
+                // An older helper (app was updated): restart it from the new APK, no Wi‑Fi needed (v3+).
+                if (Helper.runningVersion(this) in 3 until com.xmaci.tesladroid.helper.HelperMain.VERSION) {
+                    helperMsg = "⏳ Оновлюю помічника… · Updating the helper…"
+                    helperMsg = Helper.upgrade(this) ?: "оновлення не вдалося · update failed"
+                }
+                if (Helper.ping(this) == null && phoneOnWifi()) {
                     val can = AutoHelperJob.canAutoStart(this)
                     if (can || wirelessDebuggingOn()) {
                         helperMsg = "⏳ Запускаю помічника… · Starting the helper…"
@@ -292,6 +297,8 @@ class MainActivity : Activity() {
 
     private fun onVpnReady() {
         CarVpnService.start(this)
+        // Helper running (v9+, Android 14+): no screen capture at all — no recording chip, no dialog.
+        if (StreamService.canStreamWithHelper(helperLine)) { StreamService.startWithHelper(this); return }
         val mpm = getSystemService(MediaProjectionManager::class.java)
         // Android 14+: ask for the whole screen straight away (no "one app" choice): with one app shared,
         // switching apps would leave the car black.

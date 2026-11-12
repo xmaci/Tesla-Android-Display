@@ -683,6 +683,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
                 if (w >= 100 && h >= 100 && (w != vpW || h != vpH)) { vpW = w; vpH = h; if (carMode) resize(wantWidth) }
             }
+            "ph" -> {
+                darkPhone = p.getOrNull(1) == "dark"
+                if (!darkPhone && panelOff) { panelOff = false; car?.phone(true) }
+            }
             "cs" -> {
                 val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
                 val d = p.getOrNull(3)?.toIntOrNull() ?: 0
@@ -740,11 +744,26 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
      * lights the panel (lock screen) — the phone is then used normally; the next press darkens it again.
      */
     @Volatile private var panelOff = false
+    /** Car page ⚙ → «Phone screen»: dark = wake the phone and switch only its panel off when it sleeps
+     *  (experimental: on some phones touch then fails and the screen flashes). Off by default. */
+    @Volatile private var darkPhone = false
+    private val offTimes = ArrayDeque<Long>()
     @Volatile private var carPower = ""
     private val screenOff = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             val cd = car ?: return
             if (!carMode) return
+            if (!darkPhone) return                         // trick is opt-in (⚙ → Phone screen)
+            val now = SystemClock.uptimeMillis()
+            offTimes.addLast(now)
+            while (offTimes.isNotEmpty() && now - offTimes.first() > 60_000) offTimes.removeFirst()
+            if (offTimes.size > 3) {
+                // Android keeps switching the screen off on its own (lock-screen timeout): the trick would loop
+                // (screen flashing, touch dead). Give up: panel back on, let the phone sleep normally.
+                darkPhone = false; panelOff = false; cd.phone(true)
+                conn?.sendText("cd:⚠ Гасіння екрана телефона вимкнено: телефон сам гасить екран · phone dimming turned off (loop)")
+                return
+            }
             if (panelOff) { panelOff = false; cd.phone(true) } else { panelOff = true; cd.phone(false) }
         }
     }

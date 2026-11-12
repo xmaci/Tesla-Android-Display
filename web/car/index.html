@@ -74,7 +74,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.13.12</div>
+  <div id="ver">v0.13.13</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
@@ -86,6 +86,8 @@
   <div class="row carOnly" style="display:none"><div class="lbl">Статистика (fps, затримка) і профіль 5s · Stats</div><div id="optT"></div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Розмір екрана «Авто» · Car screen size</div><div id="optZ"></div>
     <div class="hint" id="zHint">Легкий = MCU1 · Середній = Intel · Повний = область браузера 1:1 · Чіткий = ×dpr (найважчий)</div></div>
+  <div class="row carOnly" style="display:none"><div class="lbl">Екран телефона, коли заблоковано · Phone screen when locked</div><div id="optH"></div>
+    <div class="hint">Гасити = телефон не засинає, гасне лише дисплей (експеримент: на деяких телефонах збоїть дотик) · Dark = experimental</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Орієнтація · Orientation</div><div id="optR"></div>
     <div class="hint">Авто = за формою браузера (Model S/X — вертикально) · горизонтально 16:9 — для відео</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Масштаб · Scale</div><div id="optY"></div>
@@ -150,6 +152,7 @@
     d: ['phone', 'car'],
     z: ['s', 'm', 'f', 'x'],
     r: ['auto', 'port', 'land'],
+    h: ['normal', 'dark'],
     y: ['s', 'm', 'l'],
     p: ['one', 'two', 'off'],
     o: ['auto', 'bottom', 'left', 'right'],
@@ -169,6 +172,7 @@
     d: param('screen') || load('d', 'phone'),   // phone = mirror the phone, car = car-shaped screen of its own
     z: load('z', mcu1 ? 's' : 'm'),             // car screen size: share of the browser area (see carScreen)
     r: load('r', 'auto'),                       // car screen orientation
+    h: load('h', 'normal'),                     // phone screen when locked: normal sleep or dark (panel-off trick)
     y: load('y', 'm'),                          // car screen scale (icons/text)
     p: load('p', 'one'),                        // car panel: one, two (favourites / recents apart), off
     o: load('o', 'auto'),                       // panel position: auto = bottom on a squarish/tall browser, else left
@@ -231,7 +235,7 @@
     if (!ws || ws.readyState !== 1) { return; }
     vpSent = ''; csSent = '';
     carRows(); applyDock();          // layout() inside sends vp / cs
-    sendVp(); sendCs(); ws.send('mode:' + set.d);
+    sendVp(); sendCs(); ws.send('ph:' + set.h); ws.send('mode:' + set.d);
     if (set.d === 'car') { loadPanel(); }
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
@@ -287,6 +291,7 @@
     if (key === 'b') { tick(); return; }
     if (key === 'd') { sendMode(); return; }
     if (key === 'z' || key === 'y' || key === 'r') { sendCs(); return; }
+    if (key === 'h') { if (ws && ws.readyState === 1) { ws.send('ph:' + set.h); } return; }
     if (key === 'p' || key === 'o' || key === 't') { applyDock(); return; }
     sendCfgSoon();
   }
@@ -299,6 +304,7 @@
   buildOptions('b', 'optB', function (v) { return v === '0' ? 'Off' : v === 'a' ? 'Auto' : v; });
   buildOptions('d', 'optD', function (v) { return v === 'car' ? 'Авто · Car' : 'Телефон · Phone'; });
   buildOptions('z', 'optZ', function (v) { return { s: 'Легкий · Light', m: 'Середній · Medium', f: 'Повний · Full', x: 'Чіткий · Sharp' }[v]; });
+  buildOptions('h', 'optH', function (v) { return v === 'dark' ? 'Гасити · Dark' : 'Звичайно · Normal'; });
   buildOptions('r', 'optR', function (v) { return { auto: 'Авто', port: 'Вертикально · Portrait', land: 'Горизонтально · Landscape' }[v]; });
   buildOptions('y', 'optY', function (v) { return v.toUpperCase(); });
   buildOptions('p', 'optP', function (v) { return v === 'one' ? 'Одна · One' : v === 'two' ? 'Дві · Two' : 'Вимк · Off'; });
@@ -767,7 +773,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.13.12 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.13.13 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',

@@ -47,6 +47,11 @@ object Helper {
      * starts the helper detached, so it survives turning debugging off. Blocking; call off the UI thread.
      */
     fun start(ctx: Context): String {
+        DiagLog.init(ctx)
+        return startInner(ctx).also { DiagLog.add("help", "start: " + it.lineSequence().first(), important = !it.startsWith("running") && !it.startsWith("already")) }
+    }
+
+    private fun startInner(ctx: Context): String {
         ping(ctx)?.let {
             // An older helper (from a previous app version) lacks newer commands: replace it.
             val v = Regex("v=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
@@ -113,7 +118,9 @@ object Helper {
      * Helper v3+ restarts itself from the installed (newer) APK: no Wireless debugging or Wi‑Fi needed,
      * so it works in the car. Returns a status line if the new helper answers, null otherwise.
      */
-    fun upgrade(ctx: Context): String? {
+    fun upgrade(ctx: Context): String? = upgradeInner(ctx).also { DiagLog.add("help", "upgrade: ${it ?: "failed"}", important = true) }
+
+    private fun upgradeInner(ctx: Context): String? {
         if (request(ctx, "upgrade ${ctx.applicationInfo.sourceDir}")?.startsWith("UPGRADING") != true) return null
         repeat(24) {
             Thread.sleep(250)

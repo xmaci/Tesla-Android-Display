@@ -74,7 +74,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.14.0</div>
+  <div id="ver">v0.14.1</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
@@ -111,6 +111,8 @@
   <div class="row"><div class="lbl">Вигляд · View</div><div id="optV"></div>
     <div class="hint">mjpeg = без JavaScript (тест швидкості) · gpu · draw · fit = повільний · 1:1 = малий · img</div></div>
   </div>
+  <div class="row"><div class="lbl">Підвисло? · Something froze?</div><button id="bReport">📋 Надіслати звіт · Send report</button>
+    <div class="hint">телефон збереже останні 30 хв подій і запропонує надіслати · the phone saves the last 30 min and offers to send it</div></div>
   <button id="bClose">✕ Закрити · Close</button>
 </div>
 
@@ -321,6 +323,33 @@
     } else if (carFailShown) { msg.style.display = 'none'; carFailShown = false; }
   }
 
+  // ---- black box: tell the phone's log when something freezes here (it keeps the last 30 min) ----
+  var pictureAt = now(), closedAt = 0, touchWaitSince = 0, frozeSince = 0;
+  function lg(t) { if (ws && ws.readyState === 1) { ws.send('lg:' + t); } }
+  function blackBoxHello() {
+    if (closedAt) { lg('⚠ reconnected after ' + ((now() - closedAt) / 1000).toFixed(1) + ' s'); closedAt = 0; }
+    lg('page ' + navigator.userAgent.replace(/[^A-Za-z0-9_.()\/ ;-]/g, '').slice(0, 120) + ' · view ' + set.v + ' · screen ' + set.d +
+      ' · ' + wrap.clientWidth + 'x' + wrap.clientHeight + ' dpr ' + (window.devicePixelRatio || 1));
+    pictureAt = now();
+  }
+  setInterval(function () {
+    if (!ws || ws.readyState !== 1) { return; }
+    var t = now();
+    // The phone says the screen changes (area), but no new picture here for 3 s: frozen.
+    if ((server.area || 0) >= 5 && t - pictureAt > 3000) {
+      if (!frozeSince) { frozeSince = pictureAt; lg('⚠ freeze: no new picture for ' + ((t - pictureAt) / 1000).toFixed(1) + ' s · view ' + set.v +
+        ' · phone fps ' + (server.fps || 0) + ' lat ' + (server.lat || 0) + ' net ' + (server.net || 0)); }
+    } else if (frozeSince && t - pictureAt < 1500) {
+      lg('picture back after ' + ((pictureAt - frozeSince) / 1000).toFixed(1) + ' s'); frozeSince = 0;
+    }
+    // A touch the phone never confirmed.
+    if (touchWaitSince && t - touchWaitSince > 2500) { lg('⚠ touch: no answer from the phone for 2.5 s'); touchWaitSince = 0; }
+  }, 1000);
+  onTap(document.getElementById('bReport'), function () {
+    lg('⚠ report requested from the car');
+    if (ws && ws.readyState === 1) { ws.send('report'); }
+  }, 3000);
+
   // ---- car panel (dock) ----
   var panelData = null;
   function esc(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
@@ -520,10 +549,11 @@
       if (presentTimer) { clearTimeout(presentTimer); presentTimer = null; }
       connGen++;
       msg.style.display = 'none'; sendCfg(); sendMode();
+      blackBoxHello();
       if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
       everOpen = true;
     };
-    ws.onclose = function () { msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); };
+    ws.onclose = function () { if (!closedAt) { closedAt = now(); } msg.style.display = 'block'; msg.innerHTML = 'Немає зв’язку з телефоном · Phone disconnected'; schedule(); };
     ws.onerror = function () {};
     ws.onmessage = onMessage;
   }
@@ -553,6 +583,7 @@
       else if (d.indexOf('cd:') === 0 && d.charAt(3) === '✗') { carBanner(d.substr(3)); document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('cd:') === 0) { document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('ti:') === 0) {
+        touchWaitSince = 0;
         var r = d.substr(3);
         if (r === '1') { touchOk++; } else if (r === 'x') { touchNoSvc++; } else { touchFail++; }
         if (prof && prof.touchT.length) { prof.touchAck.push(Math.round(now() - prof.touchT.shift())); }
@@ -567,7 +598,7 @@
       x: dv.getUint16(12), y: dv.getUint16(14), rw: dv.getUint16(16), rh: dv.getUint16(18),
       bytes: ev.data.byteLength, t0: 0, t1: 0, wait: 0, dec: 0
     };
-    if (!f.more) { noteArrival(t); }
+    if (!f.more) { noteArrival(t); pictureAt = t; }
     queue.push(f);
     pump();
   }
@@ -773,7 +804,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.14.0 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.14.1 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',
@@ -866,6 +897,7 @@
     if (prof) { prof.touchT.push(now()); }
     var t = e.changedTouches[0];
     sendTouch('u', pos(t.clientX, t.clientY));
+    if (!touchWaitSince) { touchWaitSince = now(); }
     showStats();
   }
   wrap.addEventListener('touchend', touchEnd, false);
@@ -942,7 +974,7 @@
         picState = 'STUCK';
         if (sameFor >= 3) { sameFor = 0; mjRestarts++; restartMj(); }
       } else { picState = 'same'; }
-    } else { sameFor = 0; picState = 'ok'; }
+    } else { sameFor = 0; picState = 'ok'; pictureAt = now(); }
     lastSig = sig;
   }
   setInterval(checkMj, 1300);

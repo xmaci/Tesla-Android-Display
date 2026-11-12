@@ -69,6 +69,7 @@ class CarVpnService : VpnService() {
         // A car that is streaming fine proves the link works; don't cut it for a harmless blip.
         if (StreamService.carConnected) return@Runnable
         Log.i(TAG, "network changed — rebuilding car link")
+        DiagLog.add("vpn", "network changed — rebuilding car link", important = true)
         rebuilds++
         establish()
     }

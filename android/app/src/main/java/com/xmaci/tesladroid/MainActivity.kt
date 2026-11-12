@@ -37,7 +37,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.14.0"
+        const val VERSION = "0.14.1"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -81,6 +81,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DiagLog.init(this)
         AutoHelperJob.schedule(this)
         // Ask for notifications up front, in the app (pairing code entry and setup hints need them).
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -223,6 +224,18 @@ class MainActivity : Activity() {
         button(advanced, "Самоперевірка · Self-test") { runSelfTest() }
         diag = text(advanced, "", 12f, color = Color.rgb(170, 200, 255)).apply { typeface = Typeface.MONOSPACE }
 
+        // Black box: the last 30 minutes, one tap to share (after a freeze in the car).
+        button(col, "Надіслати звіт про збій · Send a problem report") {
+            Thread {
+                val extra = "app $VERSION · helper ${helperLine ?: "not running"} · paired ${Config.paired(this)} · " +
+                    "stream ${StreamService.status} · car ${StreamService.carStatus.ifEmpty { "-" }}"
+                val share = DiagLog.report(this, extra)
+                runOnUiThread {
+                    if (share != null) startActivity(share)
+                    else Toast.makeText(this, "Не вдалося зберегти звіт · Could not save the report", Toast.LENGTH_LONG).show()
+                }
+            }.start()
+        }
         text(col, "v$VERSION", 11f, color = Color.rgb(90, 90, 90), center = true)
         setContentView(ScrollView(this).apply { setBackgroundColor(Color.rgb(17, 17, 17)); addView(col) })
     }

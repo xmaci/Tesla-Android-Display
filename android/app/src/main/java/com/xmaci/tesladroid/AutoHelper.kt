@@ -65,6 +65,7 @@ class AutoHelperJob : JobService() {
             val line = SimpleDateFormat("dd.MM HH:mm", Locale.US).format(Date()) + " " + r
             ctx.getSharedPreferences("tesladroid", Context.MODE_PRIVATE).edit().putString("auto_helper", line).apply()
             Log.i(TAG, "auto helper: $line")
+            DiagLog.init(ctx); DiagLog.add("help", "auto start: $r", important = true)
             return r
         }
 

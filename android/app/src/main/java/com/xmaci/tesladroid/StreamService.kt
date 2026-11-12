@@ -235,6 +235,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         self = this
+        DiagLog.init(this)
         if (intent?.action == ACTION_STOP) {
             shutdown(); stopSelf(); return START_NOT_STICKY
         }
@@ -267,6 +268,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     }
 
     private fun begin(code: Int, data: Intent) {
+        DiagLog.add("strm", "start with screen capture")
         readScreenSize()
         val mpm = getSystemService(MediaProjectionManager::class.java)
         val mp = mpm.getMediaProjection(code, data) ?: throw IllegalStateException("projection denied")
@@ -296,6 +298,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     /** Started without MediaProjection: the phone mirror comes from the helper too. */
     private fun beginHelper() {
+        DiagLog.add("strm", "start via helper (no screen capture)")
         readScreenSize()
         helperMode = true
         startCommon()
@@ -531,6 +534,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             lastStats = now
         }
         c.sendText("s:$json")
+        DiagLog.add("stat", statsLine + " · " + (if (car?.mirror == true) "mirror" else if (carMode) "car" else if (mjpegMode) "mjpeg" else "canvas") +
+            " ${frameW}x$frameH q$quality")
     }
 
     // ---------- adaptive resolution ----------
@@ -644,6 +649,24 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         out.write(body); out.flush()
     }
 
+    /** Car ⚙ → «Send report»: saved to Downloads; a notification on the phone opens the share sheet. */
+    private fun sendReport() {
+        val extra = "app ${try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "?" }} · " +
+            "helper ${Helper.info ?: "not running"} · car ${carStatus.ifEmpty { "-" }} · stream $status"
+        val share = DiagLog.report(this, extra)
+        val ok = share != null
+        conn?.sendText("cd:" + if (ok) "✓ Звіт збережено на телефоні (Завантаження) — надішліть зі сповіщення · Report saved — send it from the phone notification"
+            else "✗ Звіт не вдалося зберегти · could not save the report")
+        if (!ok) return
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("report", "Звіт · Report", NotificationManager.IMPORTANCE_HIGH))
+        nm.notify(5, Notification.Builder(this, "report").setSmallIcon(android.R.drawable.ic_menu_send)
+            .setContentTitle("TeslaDroid · звіт готовий · report ready")
+            .setContentText("Натисніть, щоб надіслати · Tap to send")
+            .setContentIntent(PendingIntent.getActivity(this, 5, share, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .setAutoCancel(true).build())
+    }
+
     /** Favourites or recents changed: the car page reloads its panel. */
     private fun panelChanged() { try { conn?.sendText("pn") } catch (_: Throwable) {} }
 
@@ -665,6 +688,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     // ---------- CarServer.Listener ----------
 
     override fun onOpen(conn: CarServer.Conn) {
+        DiagLog.add("car", "connected")
         synchronized(lock) {
             this.conn = conn
             inFlight.clear()
@@ -676,6 +700,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     }
 
     override fun onClose(conn: CarServer.Conn) {
+        DiagLog.add("car", "⚠ disconnected", important = true)
         synchronized(lock) { if (this.conn === conn) { this.conn = null; carConnected = false } }
         if (carMode) { captureHandler.removeCallbacks(carGone); captureHandler.postDelayed(carGone, 120_000) }
     }
@@ -720,12 +745,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 else if (carMode && c != null && k != "notifications") c.key(k)
                 else TouchService.instance?.key(k)
             }
-            "mode" -> if (p.getOrNull(1) == "car") startCar()
+            "mode" -> if (p.getOrNull(1) == "car".also { DiagLog.add("car", "mode ${p.getOrNull(1)}") }) startCar()
                 else if (car?.mirror != true) { stopCar(); if (helperMode) startMirror() }
             "vp" -> {
                 val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
                 if (w >= 100 && h >= 100 && (w != vpW || h != vpH)) { vpW = w; vpH = h; if (carMode) resize(wantWidth) }
             }
+            "lg" -> DiagLog.add("car", text.substring(3), important = text.contains('⚠'))
+            "report" -> Thread { sendReport() }.start()
             "ph" -> {
                 darkPhone = p.getOrNull(1) == "dark"
                 if (!darkPhone && panelOff) { panelOff = false; car?.phone(true) }
@@ -877,6 +904,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     override fun onCarEnded(display: CarDisplay) {
         if (car !== display) return
         val st = display.status
+        DiagLog.add("help", "⚠ ${if (display.mirror) "mirror" else "car screen"} ended: $st", important = true)
         stopCar()
         if (helperMode && !display.mirror) startMirror()     // car screen failed: show the phone again
         carStatus = st
@@ -890,6 +918,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             if (carLaunch.isNotEmpty() && carLaunch != CAR_HOME) car?.launch(carLaunch)
         }
         if (line.startsWith("launch:") || line.startsWith("ERR") || line.startsWith("power:")) conn?.sendText("cd:" + line)
+        if (!line.startsWith("touch:")) DiagLog.add("help", line, important = line.startsWith("ERR"))
+        else if (!line.endsWith("ok")) DiagLog.add("help", "⚠ $line", important = true)
         if (line.startsWith("power:")) carPower = line
     }
 
@@ -926,6 +956,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     // ---------- teardown ----------
 
     private fun shutdown() {
+        if (running) DiagLog.add("strm", "stop · $status", important = true)
         running = false
         stopCar()
         status = if (status == "streaming") "stopped" else status

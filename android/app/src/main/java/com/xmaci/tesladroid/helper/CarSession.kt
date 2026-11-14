@@ -25,7 +25,8 @@ import java.net.Socket
  *   k <back|home|recents>     key on the display
  *   launch <pkg/cls>          start an activity on the display
  *   size <w> <h> <dpi>        resize the display
- *   phone <off|on>            phone went to sleep: wake it (stays locked) and turn its panel off / back on
+ *   keep <on|off>             keep the phone from sleeping (screen wake lock) while the car screen runs
+ *   phone <dim|undim>         locked with the power key: wake it (stays locked) at minimum brightness / restore
  * helper -> app, 16-byte header + body:
  *   type 1 (frame): w, h, length → RGBA rows, no padding (w*4 bytes each)
  *   type 2 (text):  length, 0, 0 → UTF-8 line ("OK <displayId> <flags>", "launch: …", "ERR …")
@@ -231,12 +232,16 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             })
             "launch" -> launch(p[1])
             "size" -> resize(p[1].toInt(), p[2].toInt(), p[3].toInt())
-            "phone" -> {
-                val w = Panel.wake()
-                if (p[1] == "off") Thread.sleep(700)          // let the panel come on first, then darken it
-                val r = Panel.set(p[1] != "off")
-                panelOff = p[1] == "off" && r.startsWith("panel off")
-                text("power: wake ${if (w) "ok" else "refused"}, $r")
+            // keep on|off: the phone must not sleep while the car screen runs — Android stops drawing every
+            // display, ours too, when the phone sleeps. A screen wake lock held by the shell user.
+            "keep" -> { keepAwake(p[1] == "on"); text("power: keep awake ${p[1]}") }
+            // dim: the phone was locked with the power key — wake it (stays locked) at minimum brightness.
+            // undim: unlocked by the user — brightness back. (Replaces switching the panel off, which made
+            // touch fail and the screen flash on some phones.)
+            "phone" -> when (p[1]) {
+                "dim" -> { val w = Panel.wake(); dim(true); text("power: wake ${if (w) "ok" else "refused"}, dimmed") }
+                "undim" -> { dim(false); text("power: brightness restored") }
+                else -> { if (panelOff) { Panel.set(true); panelOff = false }; text("power: panel on") }
             }
         }
     }
@@ -290,10 +295,43 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         }
     }
 
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var savedBrightness: Pair<String, String>? = null      // mode, level before dimming
+
+    @Suppress("DEPRECATION")
+    private fun keepAwake(on: Boolean) {
+        try {
+            if (on && wakeLock == null) {
+                val pm = ShellEnv.context.getSystemService(android.os.PowerManager::class.java)
+                wakeLock = pm.newWakeLock(android.os.PowerManager.SCREEN_DIM_WAKE_LOCK, "tesladroid:car").also { it.acquire() }
+            } else if (!on) { wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null }
+        } catch (t: Throwable) { text("ERR keep awake: ${t.javaClass.simpleName} ${t.message}") }
+    }
+
+    private fun sh(vararg cmd: String): String = try {
+        val pr = ProcessBuilder(*cmd).redirectErrorStream(true).start()
+        pr.inputStream.bufferedReader().readText().trim().also { pr.waitFor() }
+    } catch (_: Exception) { "" }
+
+    private fun dim(on: Boolean) {
+        if (on) {
+            if (savedBrightness == null) savedBrightness = Pair(
+                sh("settings", "get", "system", "screen_brightness_mode"), sh("settings", "get", "system", "screen_brightness"))
+            sh("settings", "put", "system", "screen_brightness_mode", "0")
+            sh("settings", "put", "system", "screen_brightness", "1")
+        } else savedBrightness?.let { (mode, level) ->
+            if (level.toIntOrNull() != null) sh("settings", "put", "system", "screen_brightness", level)
+            if (mode.toIntOrNull() != null) sh("settings", "put", "system", "screen_brightness_mode", mode)
+            savedBrightness = null
+        }
+    }
+
     private fun close() {
         closed = true
         if (!released.compareAndSet(false, true)) return
         if (panelOff) { Panel.set(true); panelOff = false }   // never leave the phone with a dark panel
+        dim(false)                                           // nor dimmed
+        keepAwake(false)
         handler.post {
             try { display?.release() } catch (_: Throwable) {}
             display = null

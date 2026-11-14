@@ -134,7 +134,8 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
     fun launch(component: String) = send("launch $component")
     fun resize(width: Int, height: Int, dpi: Int) = send("size $width $height $dpi")
     /** off: the phone went to sleep — wake it (stays locked) and darken its panel; on: panel back on. */
-    fun phone(on: Boolean) = send("phone ${if (on) "on" else "off"}")
+    fun phone(on: Boolean) = send("phone ${if (on) "undim" else "dim"}")
+    fun keepAwake(on: Boolean) = send("keep ${if (on) "on" else "off"}")
 
     /** Lets queued lines (e.g. "phone on") reach the helper before the socket closes. */
     fun flushAndStop() {

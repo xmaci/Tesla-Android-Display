@@ -688,6 +688,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     // ---------- CarServer.Listener ----------
 
     override fun onOpen(conn: CarServer.Conn) {
+        captureHandler.removeCallbacks(carGone)
+        car?.takeIf { carMode && !it.mirror && dimPhone }?.keepAwake(true)
         DiagLog.add("car", "connected")
         synchronized(lock) {
             this.conn = conn
@@ -754,8 +756,11 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             "lg" -> DiagLog.add("car", text.substring(3), important = text.contains('⚠'))
             "report" -> Thread { sendReport() }.start()
             "ph" -> {
-                darkPhone = p.getOrNull(1) == "dark"
-                if (!darkPhone && panelOff) { panelOff = false; car?.phone(true) }
+                dimPhone = p.getOrNull(1) != "normal"
+                car?.takeIf { !it.mirror }?.let { c ->
+                    c.keepAwake(dimPhone)
+                    if (!dimPhone && dimmed) { dimmed = false; c.phone(true) }
+                }
             }
             "cs" -> {
                 val w = p.getOrNull(1)?.toIntOrNull() ?: 0; val h = p.getOrNull(2)?.toIntOrNull() ?: 0
@@ -813,35 +818,50 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
      * so the helper wakes the phone (it stays locked) and darkens only its panel. Pressing power again
      * lights the panel (lock screen) — the phone is then used normally; the next press darkens it again.
      */
-    @Volatile private var panelOff = false
-    /** Car page ⚙ → «Phone screen»: dark = wake the phone and switch only its panel off when it sleeps
-     *  (experimental: on some phones touch then fails and the screen flashes). Off by default. */
-    @Volatile private var darkPhone = false
-    private val offTimes = ArrayDeque<Long>()
+    /**
+     * Car ⚙ → «Phone screen when locked». Android stops drawing every display — the car screen too —
+     * when the phone sleeps, so by default ("dim") the helper keeps the phone awake while the car screen
+     * runs, and when it is locked with the power key wakes it again at minimum brightness (stays locked);
+     * unlocking restores the brightness. "normal" lets the phone sleep (the car screen stops then).
+     */
     @Volatile private var carPower = ""
-    private val screenOff = object : android.content.BroadcastReceiver() {
+    @Volatile private var dimPhone = true
+    @Volatile private var dimmed = false
+    private val offTimes = ArrayDeque<Long>()
+    private val powerEvents = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             val cd = car ?: return
-            if (!carMode) return
-            if (!darkPhone) return                         // trick is opt-in (⚙ → Phone screen)
-            val now = SystemClock.uptimeMillis()
-            offTimes.addLast(now)
-            while (offTimes.isNotEmpty() && now - offTimes.first() > 60_000) offTimes.removeFirst()
-            if (offTimes.size > 3) {
-                // Android keeps switching the screen off on its own (lock-screen timeout): the trick would loop
-                // (screen flashing, touch dead). Give up: panel back on, let the phone sleep normally.
-                darkPhone = false; panelOff = false; cd.phone(true)
-                conn?.sendText("cd:⚠ Гасіння екрана телефона вимкнено: телефон сам гасить екран · phone dimming turned off (loop)")
-                return
+            if (!carMode || cd.mirror) return
+            when (i.action) {
+                Intent.ACTION_USER_PRESENT -> if (dimmed) { dimmed = false; cd.phone(true); DiagLog.add("pwr", "unlocked: brightness back") }
+                Intent.ACTION_SCREEN_OFF -> {
+                    if (!dimPhone) { DiagLog.add("pwr", "screen off (normal mode: car screen stops)"); return }
+                    val now = SystemClock.uptimeMillis()
+                    offTimes.addLast(now)
+                    while (offTimes.isNotEmpty() && now - offTimes.first() > 60_000) offTimes.removeFirst()
+                    if (offTimes.size > 4) {
+                        // Something keeps switching the screen off: stop fighting it (no flashing loop).
+                        dimPhone = false; dimmed = false; cd.phone(true); cd.keepAwake(false)
+                        DiagLog.add("pwr", "⚠ screen keeps going off — dimming stopped", important = true)
+                        conn?.sendText("cd:⚠ Телефон сам гасне — тримання екрана вимкнено · phone keeps sleeping — keep-awake off")
+                        return
+                    }
+                    dimmed = true; cd.phone(false)
+                    DiagLog.add("pwr", "locked: woken, dimmed")
+                }
             }
-            if (panelOff) { panelOff = false; cd.phone(true) } else { panelOff = true; cd.phone(false) }
         }
     }
-    private var screenOffRegistered = false
+    private var powerRegistered = false
 
-    /** Car gone for 2 minutes: light the panel again and let the phone sleep normally. */
+    /** Car gone for 2 minutes: brightness back, let the phone sleep normally. */
     private val carGone = Runnable {
-        if (carMode && !carConnected && panelOff) { panelOff = false; car?.phone(true) }
+        val c = car ?: return@Runnable
+        if (carMode && !carConnected && !c.mirror) {
+            if (dimmed) { dimmed = false; c.phone(true) }
+            c.keepAwake(false)
+            DiagLog.add("pwr", "car gone 2 min: phone may sleep")
+        }
     }
 
     /** Started via the helper (no MediaProjection): the phone screen is a helper mirror session. */
@@ -859,10 +879,13 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         // carMode (and pausing the phone mirror) waits for the first car frame: if the helper is missing
         // or fails, the car keeps seeing the phone instead of a frozen picture.
         val (w, h, d) = carSize()
-        car = CarDisplay(this, this).also { it.start(w, h, d, true) }
-        if (!screenOffRegistered) {
-            registerReceiver(screenOff, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF))
-            screenOffRegistered = true
+        car = CarDisplay(this, this).also { it.start(w, h, d, true); if (dimPhone) it.keepAwake(true) }
+        offTimes.clear()
+        if (!powerRegistered) {
+            registerReceiver(powerEvents, android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_USER_PRESENT)
+            })
+            powerRegistered = true
         }
         synchronized(lock) { forceFull = true; sentCaptureSeq = 0 }
         carStatus = "starting"
@@ -871,8 +894,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     @Synchronized private fun stopCar() {
         val c = car ?: run { carMode = false; return }
         car = null
-        if (panelOff) { panelOff = false; c.phone(true); c.flushAndStop() } else c.stop()
-        if (screenOffRegistered) { try { unregisterReceiver(screenOff) } catch (_: Throwable) {}; screenOffRegistered = false }
+        if (!c.mirror) { if (dimmed) c.phone(true); c.keepAwake(false); dimmed = false; c.flushAndStop() } else c.stop()
+        if (powerRegistered) { try { unregisterReceiver(powerEvents) } catch (_: Throwable) {}; powerRegistered = false }
         carMode = false
         carStatus = ""
         if (projection == null) status = "car screen off; phone mirror was stopped by Android — restart streaming"

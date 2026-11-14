@@ -13,6 +13,7 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -37,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.14.2"
+        const val VERSION = "0.14.3"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -243,6 +244,7 @@ class MainActivity : Activity() {
     override fun onResume() { super.onResume(); ui.post(tick); autoStartHelper() }
 
     private val helperStarting = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var startingSince = 0L
 
     /**
      * Opening the app starts the helper by itself when it can: paired, on Wi‑Fi, helper not running.
@@ -252,6 +254,7 @@ class MainActivity : Activity() {
     private fun autoStartHelper() {
         if (!Config.paired(this)) return
         if (!helperStarting.compareAndSet(false, true)) return
+        startingSince = SystemClock.uptimeMillis()
         Thread {
             try {
                 // An older helper (app was updated): restart it from the new APK, no Wi‑Fi needed (v3+).
@@ -262,7 +265,6 @@ class MainActivity : Activity() {
                 if (Helper.ping(this) == null && phoneOnWifi()) {
                     val can = AutoHelperJob.canAutoStart(this)
                     if (can || wirelessDebuggingOn()) {
-                        helperMsg = "⏳ Запускаю помічника… · Starting the helper…"
                         helperMsg = if (can) AutoHelperJob.tryStart(this) else Helper.start(this)
                     }
                 }
@@ -562,9 +564,10 @@ class MainActivity : Activity() {
                 "Turn on the switch at the top, always allow on this network")
             3 -> if (!notificationsOn()) openNotificationSettings() else startPairing()
             4 -> if (helperStarting.compareAndSet(false, true)) {
-                helperMsg = "⏳ Запускаю помічника… · Starting the helper…"
+                startingSince = SystemClock.uptimeMillis()
+                helperMsg = ""
                 Thread { try { helperMsg = Helper.start(this) } finally { helperStarting.set(false) } }.start()
-            }
+            } else Toast.makeText(this, "Вже запускаю — зачекайте до 30 с · Already starting — wait up to 30 s", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -598,7 +601,7 @@ class MainActivity : Activity() {
         helperStatus.text = when {
             ok && !helperForceOpen -> "✅ Помічник працює, автозапуск на Wi‑Fi увімкнено · Helper running, auto start on ▸"
             helperLine != null -> "✅ Помічник працює · Helper running"
-            helperStarting.get() -> "⏳ Запускаю помічника… · Starting the helper…"
+            helperStarting.get() -> "⏳ Запускаю помічника… ${(SystemClock.uptimeMillis() - startingSince) / 1000} с · Starting the helper…"
             else -> "❌ Помічник ще не запущено — пройдіть кроки нижче · Helper not running yet — follow the steps below"
         }
         helperFoot.text = (if (AutoHelperJob.canAutoStart(this)) "🔁 автозапуск на Wi‑Fi увімкнено · auto start on Wi‑Fi on"

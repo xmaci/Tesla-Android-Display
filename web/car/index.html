@@ -74,7 +74,7 @@
   <button id="bRe">↻</button>
   <button id="bProf">5s</button>
   <div id="stats">…</div>
-  <div id="ver">v0.14.3</div>
+  <div id="ver">v0.14.4</div>
 </div>
 <div id="wrap"><canvas id="screen" width="432" height="960"></canvas><img id="shotA" class="shot"><img id="shotB" class="shot"><img id="mj" class="shot"></div>
 <div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
@@ -183,6 +183,9 @@
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
   if (OPT.z.indexOf(set.z) < 0) { set.z = mcu1 ? 's' : 'm'; }      // old saved sizes (640x720, full…)
+  // MCU1 (Tegra) only manages the Light size: report 15.11 — at Medium (928×1030) frames of 120–180 KB went
+  // unanswered for 12 s, the page froze 3–10 s on every app start and the browser dropped the connection.
+  if (mcu1) { OPT.z = ['s']; set.z = 's'; }
   var mj = document.getElementById('mj'), mjOn = false;
   function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
   var frameW = 0, frameH = 0;
@@ -804,7 +807,7 @@
     }
     if (S.lag.p95 > 60 || stalls > 2) { verdict += '\nPage stalls: ' + stalls + ' × >100 ms (GC or layout)'; }
     var lines = [
-      'PROFILE 5 s · v0.14.3 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
+      'PROFILE 5 s · v0.14.4 · ' + (!isMj() && server.mjs ? '⚠ MJPEG STILL OPEN · ' : '') + set.v + ' · ' + (server.w || frameW) + '×' + (server.h || frameH) + ' q' + set.q + ' ×' + set.n +
         (bufOn() ? ' · buf ' + set.b : ''),
       'shown ' + fps + ' fps' + (mj ? ' (picture changes; phone sends ' + (server.fps || 0) + ')' : '') +
         ' · phone enc ' + (server.enc || 0) + ' ms · ' + (server.kb || 0) + ' KB',

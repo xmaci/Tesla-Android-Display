@@ -18,8 +18,8 @@ android {
         applicationId = "com.xmaci.tesladroid"
         minSdk = 33
         targetSdk = 35
-        versionCode = 80
-        versionName = "0.14.3"
+        versionCode = 81
+        versionName = "0.14.4"
         ndk { abiFilters += setOf("arm64-v8a") }   // Pixel 7 and other modern phones
     }
 

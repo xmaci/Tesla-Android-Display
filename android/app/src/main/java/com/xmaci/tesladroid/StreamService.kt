@@ -898,7 +898,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         if (powerRegistered) { try { unregisterReceiver(powerEvents) } catch (_: Throwable) {}; powerRegistered = false }
         carMode = false
         carStatus = ""
-        if (projection == null) status = "car screen off; phone mirror was stopped by Android — restart streaming"
+        if (projection == null && !helperMode) status = "car screen off; phone mirror was stopped by Android — restart streaming"
         captureHandler.post { display?.surface = reader?.surface }
         synchronized(lock) { forceFull = true; sentCaptureSeq = 0; lock.notifyAll() }
     }

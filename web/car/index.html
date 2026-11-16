@@ -338,15 +338,18 @@
   setInterval(function () {
     if (!ws || ws.readyState !== 1) { return; }
     var t = now();
-    // The phone says the screen changes (area), but no new picture here for 3 s: frozen.
-    if ((server.area || 0) >= 5 && t - pictureAt > 3000) {
+    // Frozen = the phone sent pictures it is still waiting on (pend), but none arrived here for 3 s.
+    // (A still screen sends nothing — that is not a freeze.)
+    if ((server.pend || 0) > 0 && t - pictureAt > 3000) {
       if (!frozeSince) { frozeSince = pictureAt; lg('⚠ freeze: no new picture for ' + ((t - pictureAt) / 1000).toFixed(1) + ' s · view ' + set.v +
-        ' · phone fps ' + (server.fps || 0) + ' lat ' + (server.lat || 0) + ' net ' + (server.net || 0)); }
+        ' · phone fps ' + (server.fps || 0) + ' lat ' + (server.lat || 0) + ' net ' + (server.net || 0) + ' waiting ' + (server.pend || 0)); }
     } else if (frozeSince && t - pictureAt < 1500) {
       lg('picture back after ' + ((pictureAt - frozeSince) / 1000).toFixed(1) + ' s'); frozeSince = 0;
     }
     // A touch the phone never confirmed.
     if (touchWaitSince && t - touchWaitSince > 2500) { lg('⚠ touch: no answer from the phone for 2.5 s'); touchWaitSince = 0; }
+    // Heartbeat: keeps the Wi‑Fi link and the connection warm while nothing moves on the screen.
+    if (t - (window.lastPing || 0) > 2000) { window.lastPing = t; try { ws.send('p'); } catch (e) {} }
   }, 1000);
   onTap(document.getElementById('bReport'), function () {
     lg('⚠ report requested from the car');

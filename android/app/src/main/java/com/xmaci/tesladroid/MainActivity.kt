@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.2"
+        const val VERSION = "0.15.3"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3

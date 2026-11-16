@@ -270,11 +270,12 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         }
     }
 
-    /** `am start` as the shell user may put any app on any display. */
+    /** `am start` as the shell user may put any app on any display. Full screen (windowing mode 1): Android 16+
+     *  treats a display with system decorations as a desktop and opened apps in small floating windows. */
     private fun launch(component: String) {
         if (!component.matches(Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+"))) { text("launch: bad name"); return }
         val pr = ProcessBuilder("/system/bin/am", "start", "--display", displayId.toString(),
-            "-f", "0x10000000", "-n", component).redirectErrorStream(true).start()
+            "-f", "0x10000000", "--windowingMode", "1", "-n", component).redirectErrorStream(true).start()
         val res = pr.inputStream.bufferedReader().readText().trim().lines().lastOrNull { it.isNotBlank() } ?: ""
         pr.waitFor()
         text("launch: ${res.take(200)}")

@@ -497,6 +497,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 }
                 sentArea += rw.toLong() * rh
                 if (!ok) break
+                pipeSent++
             }
             full.recycle()
             val areaPm = (sentArea * 1000 / (fw.toLong() * fh)).toInt()
@@ -508,7 +509,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         }
     }
 
-    private fun maybeStats() {
+    @Synchronized private fun maybeStats() {
         val now = SystemClock.uptimeMillis()
         if (now - lastStats < 1000) return
         val c = conn ?: return
@@ -522,11 +523,11 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             val sent = stSent.coerceAtLeast(1)
             json = ("{\"fps\":%.1f,\"lat\":%d,\"kb\":%d,\"enc\":%d,\"dec\":%d,\"draw\":%d,\"wait\":%d," +
                 "\"net\":%d,\"cap\":%.1f,\"w\":%d,\"h\":%d,\"q\":%d,\"win\":%d,\"touch\":%b," +
-                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d,\"mjs\":%d,\"cd\":%s}").format(
+                "\"area\":%d,\"idle\":%d,\"tok\":%d,\"tfail\":%d,\"pace\":%d,\"lag\":%d,\"mjs\":%d,\"pend\":%d,\"cd\":%s}").format(
                 java.util.Locale.US, stFrames / secs, lat, (stBytes / sent / 1024), stEnc / sent, dec, draw, wait,
                 (lat - dec - draw - wait).coerceAtLeast(0), stCaptured / secs, frameW, sendH(frameH), quality, window,
                 TouchService.instance != null, stArea / sent / 10, stIdle, touchOk, touchFail,
-                if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get(),
+                if (mjpegMode) effectiveFps() else 0, carLag, mjOpen.get(), inFlight.size,
                 org.json.JSONObject.quote(car?.status?.let { st -> (if (carPower.isEmpty()) st else "$st · $carPower").also { carStatus = it } } ?: carStatus))
             statsLine = "%.1f fps · %d ms · %d KB".format(java.util.Locale.US, stFrames / secs, stLatency / n, stBytes / n / 1024)
             stFrames = 0; stBytes = 0; stLatency = 0; stEnc = 0; stDecode = 0; stDraw = 0; stWait = 0; stCaptured = 0
@@ -687,8 +688,41 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     // ---------- CarServer.Listener ----------
 
+    // ---- black box: where the picture stops (phone screen → sent → car answered) and whether touches arrive ----
+    @Volatile private var pipeCap = 0
+    @Volatile private var pipeSent = 0
+    @Volatile private var pipeAcks = 0
+    @Volatile private var pipeTouches = 0
+    @Volatile private var helperTouchOk = 0
+    private var jamLogged = false
+    @Volatile private var statsBusy = false
+    private val pipeLog = object : Runnable {
+        override fun run() {
+            val c = conn ?: return
+            if (!c.open) return
+            var oldest = 0L; var pend = 0
+            synchronized(lock) {
+                pend = inFlight.size
+                val now = SystemClock.uptimeMillis()
+                inFlight.values.minOrNull()?.let { oldest = now - it }
+            }
+            if (carMode) DiagLog.add("pipe", "screen $pipeCap · sent $pipeSent · car answered $pipeAcks · waiting $pend/$window" +
+                " · touches car→phone $pipeTouches, helper ok $helperTouchOk")
+            pipeCap = 0; pipeSent = 0; pipeAcks = 0; pipeTouches = 0; helperTouchOk = 0
+            if (pend > 0 && oldest > 2500) {
+                if (!jamLogged) { DiagLog.add("pipe", "⚠ car not answering: $pend frame(s) waiting ${oldest / 1000.0} s", important = true); jamLogged = true }
+            } else jamLogged = false
+            // Stats (and a heartbeat) to the car even while the screen is still; on its own thread, because a
+            // stalled car connection blocks the send.
+            if (!statsBusy) { statsBusy = true; Thread({ try { maybeStats() } finally { statsBusy = false } }, "stats").start() }
+            captureHandler.postDelayed(this, 2000)
+        }
+    }
+
     override fun onOpen(conn: CarServer.Conn) {
         captureHandler.removeCallbacks(carGone)
+        captureHandler.removeCallbacks(pipeLog)
+        captureHandler.postDelayed(pipeLog, 2000)
         car?.takeIf { carMode && !it.mirror && dimPhone }?.keepAwake(true)
         DiagLog.add("car", "connected")
         synchronized(lock) {
@@ -715,6 +749,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 val seq = p.getOrNull(1)?.toLongOrNull() ?: return
                 val sent = inFlight.remove(seq)
                 val shown = p.getOrNull(5) != "0"
+                if (sent != null) pipeAcks++
                 if (sent != null && shown) {
                     stLatency += SystemClock.uptimeMillis() - sent
                     stDecode += p.getOrNull(2)?.toLongOrNull() ?: 0
@@ -920,6 +955,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             frameW = w; frameH = h
             captureSeq++
             stCaptured++
+            pipeCap++
             lock.notifyAll()
         }
     }
@@ -941,6 +977,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             if (carLaunch.isNotEmpty() && carLaunch != CAR_HOME) car?.launch(carLaunch)
         }
         if (line.startsWith("launch:") || line.startsWith("ERR") || line.startsWith("power:")) conn?.sendText("cd:" + line)
+        if (line == "touch: ok") helperTouchOk++
         if (!line.startsWith("touch:")) DiagLog.add("help", line, important = line.startsWith("ERR"))
         else if (!line.endsWith("ok")) DiagLog.add("help", "⚠ $line", important = true)
         if (line.startsWith("power:")) carPower = line
@@ -953,7 +990,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             val x = (p.getOrNull(2)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * c.w
             val y = (p.getOrNull(3)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * c.h
             c.touch(kind, x, y)
-            if (kind == "u") { touchOk++; conn.sendText("ti:1") }
+            if (kind == "u") { touchOk++; pipeTouches++; conn.sendText("ti:1") }
             return
         }
         val x = (p.getOrNull(2)?.toFloatOrNull() ?: return).coerceIn(0f, 1f) * screenW

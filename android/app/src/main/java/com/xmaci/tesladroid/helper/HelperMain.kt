@@ -23,13 +23,14 @@ import kotlin.system.exitProcess
  *   "<token> hello"  -> "TDHELPER v=<version> uid=<uid> pid=<pid>"
  *   "<token> quit"   -> helper exits
  *   "<token> display <w> <h> <dpi> <home 1|0>" -> keeps the socket open as a CarSession
+ *   "<token> hotspot <on|off>" -> Wi‑Fi hotspot with the phone's saved settings (v11)
  *   "<token> mirror <w> <h>" -> the same for a mirror of the phone screen (v9, Android 14+)
  *   "<token> upgrade <apk path>" -> starts the helper from a newer app version and exits (v3+), so
  *                                   app updates don't need Wireless debugging / Wi‑Fi again
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 10
+    const val VERSION = 11
 
     private var server: ServerSocket? = null
 
@@ -91,6 +92,24 @@ object HelperMain {
                         .redirectErrorStream(true).start()
                     Thread.sleep(200)
                     exitProcess(0)
+                }
+                "hotspot" -> {
+                    // hotspot <on|off>: run on the main looper (system services need it), answer when done
+                    sock.soTimeout = 15000
+                    val on = parts.getOrNull(2) == "on"
+                    val res = arrayOf("hotspot: timeout")
+                    val latch = java.util.concurrent.CountDownLatch(1)
+                    if (on) {
+                        // startTethering answers through a callback on this executor: create on main, wait here
+                        android.os.Handler(Looper.getMainLooper()).post { try { ShellEnv.context } catch (_: Throwable) {}; latch.countDown() }
+                        latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                        res[0] = Hotspot.set(true)
+                    } else {
+                        android.os.Handler(Looper.getMainLooper()).post { res[0] = Hotspot.set(false); latch.countDown() }
+                        latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    }
+                    log(res[0])
+                    out.write((res[0] + "\n").toByteArray())
                 }
                 "mirror" -> {
                     // mirror <w> <h>: the phone's own screen, captured by the shell user (no MediaProjection)

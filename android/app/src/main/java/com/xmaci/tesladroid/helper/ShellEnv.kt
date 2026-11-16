@@ -145,3 +145,43 @@ object Panel {
         return ok
     }
 }
+
+
+/**
+ * Wi‑Fi hotspot on/off with the phone's saved hotspot settings (name, password), like the Quick Settings
+ * tile: TetheringManager.startTethering / stopTethering (system API; the shell user holds
+ * TETHER_PRIVILEGED). Must run on a thread with a Looper (the helper's main thread).
+ */
+object Hotspot {
+    private const val TETHERING_WIFI = 0
+
+    fun set(on: Boolean): String = try {
+        val tm = ShellEnv.context.getSystemService("tethering") ?: return "no tethering service"
+        if (!on) {
+            tm.javaClass.getMethod("stopTethering", Int::class.javaPrimitiveType).invoke(tm, TETHERING_WIFI)
+            "hotspot off"
+        } else {
+            val bCls = Class.forName("android.net.TetheringManager\$TetheringRequest\$Builder")
+            val b = bCls.getConstructor(Int::class.javaPrimitiveType).newInstance(TETHERING_WIFI)
+            val req = bCls.getMethod("build").invoke(b)
+            val cbCls = Class.forName("android.net.TetheringManager\$StartTetheringCallback")
+            val result = java.util.concurrent.ArrayBlockingQueue<String>(1)
+            val cb = java.lang.reflect.Proxy.newProxyInstance(cbCls.classLoader, arrayOf(cbCls)) { proxy, m, a ->
+                when (m.name) {
+                    "onTetheringStarted" -> { result.offer("hotspot on"); null }
+                    "onTetheringFailed" -> { result.offer("hotspot failed: error ${a?.getOrNull(0)}"); null }
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "equals" -> proxy === a?.getOrNull(0)
+                    "toString" -> "TeslaDroidTetheringCallback"
+                    else -> null
+                }
+            }
+            tm.javaClass.getMethod("startTethering", req.javaClass, java.util.concurrent.Executor::class.java, cbCls)
+                .invoke(tm, req, java.util.concurrent.Executor { it.run() }, cb)
+            result.poll(8, java.util.concurrent.TimeUnit.SECONDS) ?: "hotspot: no answer"
+        }
+    } catch (e: Throwable) {
+        val c = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+        "hotspot failed: ${c.javaClass.simpleName} ${c.message}"
+    }
+}

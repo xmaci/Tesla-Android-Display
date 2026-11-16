@@ -40,6 +40,10 @@ object Helper {
     fun runningVersion(ctx: Context): Int =
         Regex("v=(\\d+)").find(ping(ctx) ?: "")?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
+    /** Hotspot on/off through the helper (v11+). Returns the helper's answer, or null if not running. */
+    fun hotspot(ctx: Context, on: Boolean): String? =
+        request(ctx, "hotspot ${if (on) "on" else "off"}", 12_000).also { DiagLog.add("hot", "hotspot ${if (on) "on" else "off"}: $it") }
+
     fun ping(ctx: Context): String? = request(ctx, "hello").takeIf { it?.startsWith("TDHELPER") == true }.also { info = it }
 
     /**

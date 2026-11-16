@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.14.4"
+        const val VERSION = "0.15.0"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -289,6 +289,18 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Потрібен код активації · Activation code needed — ${(lic as License.State.Expired).why}", Toast.LENGTH_LONG).show()
             return
         }
+        // Hotspot on by itself (helper v11+), with the phone's saved hotspot name and password.
+        if (!hotspotOn() && helperLine != null) {
+            Thread {
+                val r = Helper.hotspot(this, true)
+                if (r?.startsWith("hotspot on") == true)
+                    getSharedPreferences("tesladroid", MODE_PRIVATE).edit().putBoolean("hotspot_by_us", true).apply()
+                else runOnUiThread {
+                    Toast.makeText(this, "Роздачу не вдалося ввімкнути — увімкніть вручну · Could not turn the hotspot on: ${r ?: "helper"}",
+                        Toast.LENGTH_LONG).show()
+                }
+            }.start()
+        }
         // Like ATTD's «Старт»: bring the helper up too if it is not running and the phone is on Wi‑Fi.
         if (Config.paired(this) && helperLine == null && phoneOnWifi()) {
             helperMsg = "…"
@@ -341,6 +353,12 @@ class MainActivity : Activity() {
     private fun stopAll() {
         StreamService.stop(this)
         CarVpnService.stop(this)
+        // Hotspot off only if TeslaDroid switched it on (one the user had on stays on).
+        val prefs = getSharedPreferences("tesladroid", MODE_PRIVATE)
+        if (prefs.getBoolean("hotspot_by_us", false)) {
+            prefs.edit().putBoolean("hotspot_by_us", false).apply()
+            Thread { Helper.hotspot(this, false) }.start()
+        }
         ui.postDelayed({ refresh() }, 300)
     }
 

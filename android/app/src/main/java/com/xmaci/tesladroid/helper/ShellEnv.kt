@@ -155,7 +155,22 @@ object Panel {
 object Hotspot {
     private const val TETHERING_WIFI = 0
 
-    fun set(on: Boolean): String = try {
+    /**
+     * Android 17 answered error 14 (TETHER_ERROR_NO_CHANGE_TETHERING_PERMISSION): the shell user lacks
+     * TETHER_PRIVILEGED there, but tethering also accepts callers allowed to modify system settings
+     * (WRITE_SETTINGS app-op) — the shell user may grant itself that, then we try once more.
+     */
+    fun set(on: Boolean): String {
+        val r = setOnce(on)
+        if (!r.contains("error 14")) return r
+        try {
+            ProcessBuilder("appops", "set", "com.android.shell", "WRITE_SETTINGS", "allow")
+                .redirectErrorStream(true).start().waitFor()
+        } catch (_: Exception) {}
+        return setOnce(on).let { if (it.contains("error 14")) "$it (also with WRITE_SETTINGS)" else it }
+    }
+
+    private fun setOnce(on: Boolean): String = try {
         val tm = ShellEnv.context.getSystemService("tethering") ?: return "no tethering service"
         if (!on) {
             tm.javaClass.getMethod("stopTethering", Int::class.javaPrimitiveType).invoke(tm, TETHERING_WIFI)

@@ -30,7 +30,7 @@ import kotlin.system.exitProcess
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 13
+    const val VERSION = 14
 
     private var server: ServerSocket? = null
 
@@ -43,12 +43,22 @@ object HelperMain {
         }
         val token = args.firstOrNull()
         if (token.isNullOrBlank()) { System.err.println("token required"); exitProcess(2) }
-        server = try {
-            ServerSocket(PORT, 8, InetAddress.getByName("127.0.0.1"))
-        } catch (e: Exception) {
-            System.err.println("already running or port busy: ${e.message}")
-            exitProcess(1)
+        // "takeover" (v13+ upgrade): the old helper keeps serving while this one loads (the first start
+        // of a new APK can take tens of seconds); only when ready do we ask the old one to quit and take
+        // the port. If this copy fails to start, the old one simply keeps working.
+        val takeover = args.getOrNull(1) == "takeover"
+        var srv: ServerSocket? = null
+        for (i in 0 until (if (takeover) 20 else 1)) {
+            srv = try { ServerSocket(PORT, 8, InetAddress.getByName("127.0.0.1")) } catch (e: Exception) {
+                if (!takeover) { System.err.println("already running or port busy: ${e.message}"); exitProcess(1) }
+                try { Socket("127.0.0.1", PORT).use { o -> o.soTimeout = 2000
+                    o.getOutputStream().write("$token quit\n".toByteArray()); o.getOutputStream().flush()
+                    o.getInputStream().read() } } catch (_: Exception) {}
+                Thread.sleep(300); null
+            }
+            if (srv != null) break
         }
+        server = srv ?: run { System.err.println("takeover: port still busy"); exitProcess(1) }
         log("TeslaDroid helper v$VERSION uid=${Os.getuid()} pid=${Os.getpid()} listening")
         // System services (DisplayManager, ImageReader callbacks) expect a main looper. The system
         // context itself is made later, on the first car-screen request, so "hello" always works.
@@ -86,12 +96,11 @@ object HelperMain {
                     val apk = parts.getOrNull(2) ?: ""
                     if (!apk.matches(Regex("/data/app/[A-Za-z0-9_.~=+/-]+/base\\.apk"))) { out.write("ERR apk\n".toByteArray()); return }
                     out.write("UPGRADING\n".toByteArray()); out.flush()
-                    try { server?.close() } catch (_: Exception) {}       // free the port for the new helper
-                    ProcessBuilder("setsid", "sh", "-c", "sleep 1; CLASSPATH=$apk app_process /system/bin " +
-                        "${HelperMain::class.java.name} $token >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null")
+                    // The new copy loads in the background and asks this one to quit when it is ready
+                    // (takeover); until then this one keeps serving, so there is never a gap.
+                    ProcessBuilder("setsid", "sh", "-c", "CLASSPATH=$apk app_process /system/bin " +
+                        "${HelperMain::class.java.name} $token takeover >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null")
                         .redirectErrorStream(true).start()
-                    Thread.sleep(200)
-                    exitProcess(0)
                 }
                 "hotspot" -> {
                     // hotspot <on|off>: run on the main looper (system services need it), answer when done

@@ -126,9 +126,14 @@ object Helper {
 
     private fun upgradeInner(ctx: Context): String? {
         if (request(ctx, "upgrade ${ctx.applicationInfo.sourceDir}")?.startsWith("UPGRADING") != true) return null
-        repeat(24) {
+        // Up to 90 s: a new APK's first start can be slow. Old helpers (≤ v12) exit at once and leave a
+        // gap; v13+ keep serving until the new copy takes over, so wait for the new version itself.
+        repeat(360) {
             Thread.sleep(250)
-            ping(ctx)?.let { return "updated: $it" }
+            ping(ctx)?.let { p ->
+                val v = Regex("v=(\\d+)").find(p)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                if (v >= HelperMain.VERSION) return "updated: $p"
+            }
         }
         return null
     }

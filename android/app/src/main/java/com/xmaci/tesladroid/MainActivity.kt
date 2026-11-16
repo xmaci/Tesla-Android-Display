@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.1"
+        const val VERSION = "0.15.2"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -290,17 +290,7 @@ class MainActivity : Activity() {
             return
         }
         // Hotspot on by itself (helper v11+), with the phone's saved hotspot name and password.
-        if (!hotspotOn() && helperLine != null) {
-            Thread {
-                val r = Helper.hotspot(this, true)
-                if (r?.startsWith("hotspot on") == true)
-                    getSharedPreferences("tesladroid", MODE_PRIVATE).edit().putBoolean("hotspot_by_us", true).apply()
-                else runOnUiThread {
-                    Toast.makeText(this, "Роздачу не вдалося ввімкнути — увімкніть вручну · Could not turn the hotspot on: ${r ?: "helper"}",
-                        Toast.LENGTH_LONG).show()
-                }
-            }.start()
-        }
+        if (!hotspotOn()) switchHotspot(true)
         // Like ATTD's «Старт»: bring the helper up too if it is not running and the phone is on Wi‑Fi.
         if (Config.paired(this) && helperLine == null && phoneOnWifi()) {
             helperMsg = "…"
@@ -357,9 +347,39 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences("tesladroid", MODE_PRIVATE)
         if (prefs.getBoolean("hotspot_by_us", false)) {
             prefs.edit().putBoolean("hotspot_by_us", false).apply()
-            Thread { Helper.hotspot(this, false) }.start()
+            switchHotspot(false)
         }
         ui.postDelayed({ refresh() }, 300)
+    }
+
+    /**
+     * Hotspot on/off. First the helper (works where the shell user may tether); if Android refuses
+     * (Android 17 Pixel: error 14), the touch service presses the switch on the hotspot settings page.
+     */
+    private fun switchHotspot(on: Boolean) {
+        Thread {
+            val viaHelper = if (helperLine != null) Helper.hotspot(this, on) else null
+            var ok = viaHelper?.startsWith(if (on) "hotspot on" else "hotspot off") == true
+            var how = "helper: $viaHelper"
+            val touch = TouchService.instance
+            if (!ok && touch != null) {
+                val open = { action: String -> try { startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } catch (_: Exception) { false } }
+                if (open("com.android.settings.WIFI_TETHER_SETTINGS") || open("android.settings.TETHER_SETTINGS")) {
+                    val r = touch.setHotspot(on)
+                    ok = r.startsWith("switched") || r.startsWith("already")
+                    how = "switch: $r"
+                    // back in TeslaDroid
+                    startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                }
+            }
+            DiagLog.add("hot", "hotspot ${if (on) "on" else "off"}: $how", important = !ok)
+            if (on && ok && !how.contains("already"))
+                getSharedPreferences("tesladroid", MODE_PRIVATE).edit().putBoolean("hotspot_by_us", true).apply()
+            if (!ok) runOnUiThread {
+                Toast.makeText(this, "Роздачу не вдалося ${if (on) "ввімкнути" else "вимкнути"} — зробіть вручну · " +
+                    "Could not switch the hotspot: $how", Toast.LENGTH_LONG).show()
+            }
+        }.start()
     }
 
     // ---------- checks ----------

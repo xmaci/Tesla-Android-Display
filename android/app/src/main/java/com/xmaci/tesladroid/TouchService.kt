@@ -60,6 +60,45 @@ class TouchService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
+    /**
+     * Hotspot on/off by pressing the switch on the Wi‑Fi hotspot settings page (already opened by the
+     * caller), then going back. Android 17 refuses programmatic tethering to all but system apps (error 14),
+     * so this does what the user would do. Call off the main thread. Returns a short result.
+     */
+    fun setHotspot(on: Boolean): String {
+        repeat(25) {
+            val root = rootInActiveWindow
+            if (root != null && root.packageName == "com.android.settings") {
+                val sw = findSwitch(root)
+                if (sw != null) {
+                    val was = sw.isChecked
+                    if (was != on) {
+                        var n: android.view.accessibility.AccessibilityNodeInfo? = sw
+                        while (n != null && !n.isClickable) n = n.parent
+                        (n ?: sw).performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+                        Thread.sleep(800)
+                    }
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    return if (was == on) "already ${if (on) "on" else "off"}" else "switched ${if (on) "on" else "off"}"
+                }
+            }
+            Thread.sleep(200)
+        }
+        return "hotspot switch not found"
+    }
+
+    private fun findSwitch(root: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
+        val q = ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+        q.add(root)
+        while (q.isNotEmpty()) {
+            val n = q.removeFirst()
+            val cls = n.className?.toString() ?: ""
+            if (n.isCheckable && (cls.contains("Switch") || cls.contains("CompoundButton") || cls.contains("Toggle"))) return n
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return null
+    }
+
     fun key(name: String): Boolean = when (name) {
         "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
         "home" -> performGlobalAction(GLOBAL_ACTION_HOME)

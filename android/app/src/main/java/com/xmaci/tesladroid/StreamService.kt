@@ -778,7 +778,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             "t" -> touch(conn, p)
             "k" -> {
                 val k = p.getOrNull(1) ?: ""; val c = car
-                if (carMode && c != null && k == "home" && !c.mirror) { carLaunch = ""; c.launch(CAR_HOME) }   // our home: the system one locks with the phone
+                // Our home and "recent apps" (the car screen has no system ones; they would lock with the phone).
+                if (carMode && c != null && (k == "home" || k == "recents") && !c.mirror) {
+                    CarHomeActivity.recentMode = k == "recents"; carLaunch = ""; c.launch(CAR_HOME)
+                }
                 else if (carMode && c != null && k != "notifications") c.key(k)
                 else TouchService.instance?.key(k)
             }

@@ -395,7 +395,8 @@
     }
     h += '</div>';
     if (part !== 'rec') {
-      h += '<button data-k="back">◀</button><button data-k="home">▦</button><button data-k="set">⚙</button>';
+      // Android's own navigation keys: back, home (all apps), recent apps; then settings.
+      h += '<button data-k="back">◀</button><button data-k="home">●</button><button data-k="recents">■</button><button data-k="set">⚙</button>';
     }
     return h;
   }

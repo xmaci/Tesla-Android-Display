@@ -23,9 +23,16 @@ import kotlin.concurrent.thread
  */
 class CarHomeActivity : Activity() {
 
+    companion object {
+        /** Set by the dock's ■ (recent apps) / ● (home) before the car screen opens this activity. */
+        @Volatile var recentMode = false
+    }
+
     private data class App(val label: String, val component: String, val icon: Drawable?)
 
     private var apps: List<App> = emptyList()
+    private var all: List<App> = emptyList()
+    private lateinit var title: TextView
     private lateinit var grid: GridView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,7 +62,17 @@ class CarHomeActivity : Activity() {
                 true
             }
         }
-        setContentView(grid)
+        title = TextView(this).apply {
+            setTextColor(Color.parseColor("#9aa0a6")); textSize = 22f
+            setPadding(dp(24), dp(16), dp(24), 0); setBackgroundColor(Color.parseColor("#111111"))
+            text = "Останні · Recent"; visibility = View.GONE
+        }
+        setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#111111"))
+            addView(title)
+            addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        })
 
         thread {
             val pm = packageManager
@@ -64,7 +81,7 @@ class CarHomeActivity : Activity() {
                 .map { App(it.loadLabel(pm).toString(), "${it.activityInfo.packageName}/${it.activityInfo.name}",
                     try { it.loadIcon(pm) } catch (_: Throwable) { null }) }
                 .sortedBy { it.label.lowercase() }
-            runOnUiThread { apps = list; grid.adapter = Adapter(::dp) }
+            runOnUiThread { all = list; grid.adapter = Adapter(::dp); show() }
         }
     }
 
@@ -89,6 +106,19 @@ class CarHomeActivity : Activity() {
                 if (CarApps.isFavourite(this@CarHomeActivity, a.component)) "★ ${a.label}" else a.label
             return box
         }
+    }
+
+    override fun onResume() { super.onResume(); show() }
+
+    /** All apps (●) or the apps last opened on the car (■). */
+    private fun show() {
+        if (!::grid.isInitialized) return
+        apps = if (recentMode) {
+            val by = all.associateBy { it.component }
+            CarApps.recents(this).mapNotNull { by[it] }
+        } else all
+        title.visibility = if (recentMode) View.VISIBLE else View.GONE
+        (grid.adapter as? BaseAdapter)?.notifyDataSetChanged()
     }
 
     /** Back on the car home does nothing: without it the car screen would be empty (no system home there). */

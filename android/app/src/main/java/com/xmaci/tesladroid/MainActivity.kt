@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.4"
+        const val VERSION = "0.15.5"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -262,6 +262,8 @@ class MainActivity : Activity() {
                     helperMsg = "⏳ Оновлюю помічника… · Updating the helper…"
                     helperMsg = Helper.upgrade(this) ?: "оновлення не вдалося · update failed"
                 }
+                // Touch service switched off (e.g. after this update): turn it on again.
+                if (TouchService.instance == null && Helper.ping(this) != null) Helper.enableTouch(this)
                 if (Helper.ping(this) == null && phoneOnWifi()) {
                     val can = AutoHelperJob.canAutoStart(this)
                     if (can || wirelessDebuggingOn()) {
@@ -361,7 +363,14 @@ class MainActivity : Activity() {
             val viaHelper = if (helperLine != null) Helper.hotspot(this, on) else null
             var ok = viaHelper?.startsWith(if (on) "hotspot on" else "hotspot off") == true
             var how = "helper: $viaHelper"
-            val touch = TouchService.instance
+            var touch = TouchService.instance
+            if (!ok && touch == null && helperLine != null) {
+                // Android may switch the touch service off after an app update: the helper turns it back on.
+                Helper.enableTouch(this)
+                repeat(20) { if (TouchService.instance == null) Thread.sleep(150) }
+                touch = TouchService.instance
+                if (touch == null) how += " · touch service off"
+            }
             if (!ok && touch != null) {
                 val open = { action: String -> try { startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } catch (_: Exception) { false } }
                 if (open("com.android.settings.WIFI_TETHER_SETTINGS") || open("android.settings.TETHER_SETTINGS")) {

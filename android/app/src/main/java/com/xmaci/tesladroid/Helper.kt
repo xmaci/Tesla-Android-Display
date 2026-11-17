@@ -44,6 +44,11 @@ object Helper {
     fun hotspot(ctx: Context, on: Boolean): String? =
         request(ctx, "hotspot ${if (on) "on" else "off"}", 12_000).also { DiagLog.add("hot", "hotspot ${if (on) "on" else "off"}: $it") }
 
+    /** Turns TeslaDroid's touch (accessibility) service back on through the helper (no Wi‑Fi needed). */
+    fun enableTouch(ctx: Context): String? =
+        request(ctx, "touchsvc ${ctx.packageName}/${TouchService::class.java.name}", 5000)
+            .also { DiagLog.add("help", "touch service: ${it ?: "no answer"}") }
+
     fun ping(ctx: Context): String? = request(ctx, "hello").takeIf { it?.startsWith("TDHELPER") == true }.also { info = it }
 
     /**

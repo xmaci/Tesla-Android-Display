@@ -30,7 +30,7 @@ import kotlin.system.exitProcess
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 14
+    const val VERSION = 15
 
     private var server: ServerSocket? = null
 
@@ -101,6 +101,23 @@ object HelperMain {
                     ProcessBuilder("setsid", "sh", "-c", "CLASSPATH=$apk app_process /system/bin " +
                         "${HelperMain::class.java.name} $token takeover >/data/local/tmp/tesladroid-helper.log 2>&1 </dev/null")
                         .redirectErrorStream(true).start()
+                }
+                "touchsvc" -> {
+                    // touchsvc <pkg/cls>: turn TeslaDroid's accessibility (touch) service on — Android may switch it
+                    // off when the app is updated, and a sideloaded app cannot turn it on itself.
+                    val svc = parts.getOrNull(2) ?: ""
+                    if (!svc.matches(Regex("com\\.xmaci\\.tesladroid/[A-Za-z0-9_.$]+"))) { out.write("ERR svc\n".toByteArray()); return }
+                    val pkg = svc.substringBefore('/')
+                    val pr = ProcessBuilder("sh", "-c", "appops set $pkg ACCESS_RESTRICTED_SETTINGS allow; " +
+                        // Remove and add again: a listed but unbound service (after an update) gets bound anew.
+                        "S=\$(settings get secure enabled_accessibility_services | sed 's#$svc##g; s#::*#:#g; s#^:##; s#:\$##'); " +
+                        "case \"\$S\" in null|\"\") settings delete secure enabled_accessibility_services; S=$svc ;; " +
+                        "*) settings put secure enabled_accessibility_services \"\$S\"; S=\"\$S:$svc\" ;; esac; sleep 0.3; " +
+                        "settings put secure enabled_accessibility_services \"\$S\"; " +
+                        "settings put secure accessibility_enabled 1").redirectErrorStream(true).start()
+                    pr.waitFor()
+                    log("touch service on")
+                    out.write("touch service on\n".toByteArray())
                 }
                 "hotspot" -> {
                     // hotspot <on|off>: run on the main looper (system services need it), answer when done

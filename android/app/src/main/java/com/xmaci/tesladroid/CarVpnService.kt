@@ -68,11 +68,21 @@ class CarVpnService : VpnService() {
         if (!running && tun == null) return@Runnable
         // A car that is streaming fine proves the link works; don't cut it for a harmless blip.
         if (StreamService.carConnected) return@Runnable
+        // Car address still on an interface that is up: the link is fine, leave it alone (rebuilding
+        // while the car reconnects to the hotspot only makes it miss the address).
+        if (carAddressUp()) { DiagLog.add("vpn", "network changed — car link still up, kept"); return@Runnable }
         Log.i(TAG, "network changed — rebuilding car link")
         DiagLog.add("vpn", "network changed — rebuilding car link", important = true)
         rebuilds++
         establish()
     }
+
+    private fun carAddressUp(): Boolean = try {
+        val ip = Config.ip(this)
+        java.net.NetworkInterface.getNetworkInterfaces().toList().any { ni ->
+            ni.isUp && ni.inetAddresses.toList().any { it.hostAddress == ip }
+        }
+    } catch (_: Throwable) { false }
 
     override fun onCreate() {
         super.onCreate()

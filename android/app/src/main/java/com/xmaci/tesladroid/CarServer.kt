@@ -88,6 +88,8 @@ class CarServer(
         current = null
     }
 
+    private fun diag(s: String) { try { DiagLog.add("net", s) } catch (_: Throwable) {} }
+
     private fun note(s: String) {
         val t = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
         connLog.addFirst("$t $s")
@@ -106,6 +108,7 @@ class CarServer(
         val who = "${sock.inetAddress?.hostAddress} → ${sock.localAddress?.hostAddress}:${sock.localPort}"
         if (!allowLocal(sock.localAddress?.hostAddress ?: "")) {
             note("refused $who (not the car address)")
+            diag("⚠ refused $who (not the car address)")
             try { sock.close() } catch (_: IOException) {}
             return
         }
@@ -127,6 +130,8 @@ class CarServer(
             if (parts.size < 2 || parts[0] != "GET") return reply(sock, out, 405, "text/plain", "method".toByteArray())
             val path = parts[1].substringBefore('?')
             note("GET $path from ${sock.inetAddress?.hostAddress}")
+            // Black box: the page and the live connection (not every icon/panel request).
+            if (path == "/" || path == "/ws") diag("car asks $path from ${sock.inetAddress?.hostAddress}")
             if (path == "/ws" && headers["upgrade"]?.lowercase() == "websocket") {
                 upgrade(sock, input, out, headers["sec-websocket-key"] ?: return sock.close())
                 return

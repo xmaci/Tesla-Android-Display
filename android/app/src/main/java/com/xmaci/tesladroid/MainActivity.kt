@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.5"
+        const val VERSION = "0.15.6"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -292,7 +292,13 @@ class MainActivity : Activity() {
             return
         }
         // Hotspot on by itself (helper v11+), with the phone's saved hotspot name and password.
-        if (!hotspotOn()) switchHotspot(true)
+        // After Stop the hotspot takes a few seconds to go down: Start right away used to see it still "on"
+        // and left it off. Wait until it is really off, then switch it on.
+        Thread {
+            val since = SystemClock.uptimeMillis() - lastHotspotOff
+            if (since < 8000) repeat(30) { if (hotspotOn()) Thread.sleep(200) }
+            if (!hotspotOn()) switchHotspot(true) else DiagLog.add("hot", "hotspot already on — left as is")
+        }.start()
         // Like ATTD's «Старт»: bring the helper up too if it is not running and the phone is on Wi‑Fi.
         if (Config.paired(this) && helperLine == null && phoneOnWifi()) {
             helperMsg = "…"
@@ -358,7 +364,10 @@ class MainActivity : Activity() {
      * Hotspot on/off. First the helper (works where the shell user may tether); if Android refuses
      * (Android 17 Pixel: error 14), the touch service presses the switch on the hotspot settings page.
      */
+    @Volatile private var lastHotspotOff = -100_000L
+
     private fun switchHotspot(on: Boolean) {
+        if (!on) lastHotspotOff = SystemClock.uptimeMillis()
         Thread {
             val viaHelper = if (helperLine != null) Helper.hotspot(this, on) else null
             var ok = viaHelper?.startsWith(if (on) "hotspot on" else "hotspot off") == true

@@ -90,4 +90,9 @@ class CarHomeActivity : Activity() {
             return box
         }
     }
+
+    /** Back on the car home does nothing: without it the car screen would be empty (no system home there). */
+    @Deprecated("plain Activity API")
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {}
 }

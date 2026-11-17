@@ -914,7 +914,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         // carMode (and pausing the phone mirror) waits for the first car frame: if the helper is missing
         // or fails, the car keeps seeing the phone instead of a frozen picture.
         val (w, h, d) = carSize()
-        car = CarDisplay(this, this).also { it.start(w, h, d, true); if (dimPhone) it.keepAwake(true) }
+        // No Android system decorations on the car screen: Android 16+ made such a display a "desktop" with
+        // the phone's status bar and taskbar (which also showed or hid with the phone's lock state). Our own
+        // home and dock replace them; the keyboard stays on the car via the IME policy.
+        car = CarDisplay(this, this).also { it.start(w, h, d, false); if (dimPhone) it.keepAwake(true) }
         offTimes.clear()
         if (!powerRegistered) {
             registerReceiver(powerEvents, android.content.IntentFilter().apply {

@@ -274,6 +274,11 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
      *  treats a display with system decorations as a desktop and opened apps in small floating windows. */
     private fun launch(component: String) {
         if (!component.matches(Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+"))) { text("launch: bad name"); return }
+        // Already running (e.g. back to YouTube after Waze): bring its task back like the recents screen
+        // does. A second `am start` of a running task asked to unlock the phone first.
+        Tasks.lastError = null
+        Tasks.resume(component.substringBefore('/'), displayId)?.let { text("launch: $it"); return }
+        Tasks.lastError?.let { text("launch: $it") }
         val pr = ProcessBuilder("/system/bin/am", "start", "--display", displayId.toString(),
             "-f", "0x10000000", "--windowingMode", "1", "-n", component).redirectErrorStream(true).start()
         val res = pr.inputStream.bufferedReader().readText().trim().lines().lastOrNull { it.isNotBlank() } ?: ""

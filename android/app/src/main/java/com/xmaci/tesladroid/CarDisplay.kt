@@ -136,6 +136,8 @@ class CarDisplay(private val ctx: Context, private val listener: Listener) {
     /** off: the phone went to sleep — wake it (stays locked) and darken its panel; on: panel back on. */
     fun phone(on: Boolean) = send("phone ${if (on) "undim" else "dim"}")
     fun keepAwake(on: Boolean) = send("keep ${if (on) "on" else "off"}")
+    /** MCU1 test, shape by app: the helper reports the app on top of the car screen ("top <pkg> <orientation>"). */
+    fun watch(on: Boolean) = send("watch ${if (on) "on" else "off"}")
 
     /** Lets queued lines (e.g. "phone on") reach the helper before the socket closes. */
     fun flushAndStop() {

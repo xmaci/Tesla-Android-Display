@@ -15,6 +15,41 @@ object Tasks {
         try { Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null) } catch (_: Throwable) { null }
     }
 
+    private fun tasks(): List<Any> {
+        val a = atm ?: return emptyList()
+        val m = a.javaClass.methods.filter { it.name == "getTasks" }.minByOrNull { it.parameterTypes.size } ?: return emptyList()
+        var firstInt = true
+        val args = m.parameterTypes.map { t ->
+            when (t) {
+                Int::class.javaPrimitiveType -> if (firstInt) { firstInt = false; 100 } else -1
+                Boolean::class.javaPrimitiveType -> false
+                else -> null
+            }
+        }.toTypedArray()
+        @Suppress("UNCHECKED_CAST")
+        return (m.invoke(a, *args) as? List<Any>) ?: emptyList()
+    }
+
+    /** Package of the app on top of [displayId] (tasks come most recent first), or null. */
+    fun top(displayId: Int): String? = try {
+        tasks().firstOrNull { ti ->
+            val c = ti.javaClass
+            c.getField("displayId").getInt(ti) == displayId &&
+                (try { c.getField("isVisible").getBoolean(ti) } catch (_: Throwable) { true })
+        }?.let { ti -> (ti.javaClass.getField("topActivity").get(ti) as? android.content.ComponentName)?.packageName }
+    } catch (_: Throwable) { null }
+
+    /**
+     * The orientation [pkg]'s top activity asks for right now (YouTube asks for landscape in full screen),
+     * from `dumpsys activity activities <pkg>`: "requestedOrientation=SENSOR_LANDSCAPE" etc. "?" if unknown.
+     */
+    fun orientation(pkg: String): String = try {
+        val pr = ProcessBuilder("dumpsys", "activity", "activities", pkg).redirectErrorStream(true).start()
+        val line = pr.inputStream.bufferedReader().useLines { seq -> seq.firstOrNull { it.contains("requestedOrientation=") } }
+        pr.destroy()
+        line?.substringAfter("requestedOrientation=")?.trim()?.substringBefore(' ') ?: "?"
+    } catch (_: Throwable) { "?" }
+
     /** taskId of [pkg]'s task (base or top activity), or null. */
     private fun findTask(pkg: String): Int? {
         val a = atm ?: return null

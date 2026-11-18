@@ -235,6 +235,10 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             // keep on|off: the phone must not sleep while the car screen runs — Android stops drawing every
             // display, ours too, when the phone sleeps. A screen wake lock held by the shell user.
             "keep" -> { keepAwake(p[1] == "on"); text("power: keep awake ${p[1]}") }
+            // watch on|off (MCU1 test, shape by app): report the app on top of the car screen and the
+            // orientation it asks for ("top <pkg> <orientation>"); the app then resizes the screen. While on,
+            // the car screen ignores orientation requests (no turning sideways; the app picks a 16:9 size).
+            "watch" -> watch(p[1] == "on")
             // dim: the phone was locked with the power key — wake it (stays locked) at minimum brightness.
             // undim: unlocked by the user — brightness back. (Replaces switching the panel off, which made
             // touch fail and the screen flash on some phones.)
@@ -334,7 +338,31 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         }
     }
 
+    @Volatile private var watching = false
+
+    private fun watch(on: Boolean) {
+        if (on == watching) return
+        watching = on
+        try {
+            ProcessBuilder("cmd", "window", "set-ignore-orientation-request", "-d", displayId.toString(), on.toString())
+                .redirectErrorStream(true).start().waitFor()
+        } catch (_: Exception) {}
+        if (!on) return
+        Thread({
+            var last = ""
+            while (watching && !closed) {
+                val pkg = Tasks.top(displayId)
+                // Orientation only for apps that may go full screen (dumpsys costs a little): not ours, not Waze.
+                val o = if (pkg == null || pkg == "com.xmaci.tesladroid" || pkg == "com.waze") "-" else Tasks.orientation(pkg)
+                val line = "top ${pkg ?: "-"} $o"
+                if (line != last) { last = line; text(line) }
+                try { Thread.sleep(700) } catch (_: InterruptedException) { break }
+            }
+        }, "watch").apply { isDaemon = true }.start()
+    }
+
     private fun close() {
+        watching = false
         closed = true
         if (!released.compareAndSet(false, true)) return
         if (panelOff) { Panel.set(true); panelOff = false }   // never leave the phone with a dark panel

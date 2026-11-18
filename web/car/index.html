@@ -86,6 +86,8 @@
   <div class="row carOnly" style="display:none"><div class="lbl">Статистика (fps, затримка) і профіль 5s · Stats</div><div id="optT"></div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Розмір екрана «Авто» · Car screen size</div><div id="optZ"></div>
     <div class="hint" id="zHint">Легкий = MCU1 · Середній = Intel · Повний = область браузера 1:1 · Чіткий = ×dpr (найважчий)</div></div>
+  <div class="row carOnly mcu1Only" style="display:none"><div class="lbl">Форма екрана (тест MCU1) · Screen shape (MCU1 test)</div><div id="optA"></div>
+    <div class="hint">Під додаток: Waze 9:16, відео на весь екран 16:9, решта як Фіксований — пікселів стільки ж. Підвисає двічі за хвилину → сам повертає Фіксований · By app: Waze 9:16, full-screen video 16:9; two freezes in a minute → back to Fixed</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Екран телефона, коли заблоковано · Phone screen when locked</div><div id="optH"></div>
     <div class="hint">Тьмяний = телефон не засинає, після блокування — мінімальна яскравість, екран «Авто» працює · Normal = phone sleeps, the car screen stops</div></div>
   <div class="row carOnly" style="display:none"><div class="lbl">Орієнтація · Orientation</div><div id="optR"></div>
@@ -158,7 +160,8 @@
     y: ['s', 'm', 'l'],
     p: ['one', 'two', 'off'],
     o: ['auto', 'bottom', 'left', 'right'],
-    t: ['auto', 'on']
+    t: ['auto', 'on'],
+    a: ['fixed', 'app']
   };
   // Defaults by car: MCU1 (QtCarBrowser, Tegra) is slow → small MJPEG; Intel/Ryzen (Chromium) measured
   // 35–50 fps in gpu / 1:1 / fit → canvas view at a larger size. Saved choices always win.
@@ -178,7 +181,8 @@
     y: load('y', 'm'),                          // car screen scale (icons/text)
     p: load('p', 'one'),                        // car panel: one, two (favourites / recents apart), off
     o: load('o', 'auto'),                       // panel position: auto = bottom on a squarish/tall browser, else left
-    t: load('t', 'auto')                        // top bar: auto = hidden while the car panel is shown
+    t: load('t', 'auto'),                       // top bar: auto = hidden while the car panel is shown
+    a: load('a', 'fixed')                       // MCU1 test: car screen shape by app (Waze 9:16, full-screen video 16:9)
   };
   function applyScaling() { wrap.className = set.s === 'fast' ? 'fast' : ''; }
   if (OPT.v.indexOf(set.v) < 0) { set.v = 'mjpeg'; }
@@ -186,6 +190,8 @@
   // MCU1 (Tegra) only manages the Light size: report 15.11 — at Medium (928×1030) frames of 120–180 KB went
   // unanswered for 12 s, the page froze 3–10 s on every app start and the browser dropped the connection.
   if (mcu1) { OPT.z = ['s']; set.z = 's'; }
+  // Shape by app: MCU1 only (Tegra test); everywhere else the size stays fixed.
+  if (!mcu1) { set.a = 'fixed'; }
   var mj = document.getElementById('mj'), mjOn = false;
   function isMj() { return set.v === 'mjpeg' || set.v === 'mj1:1'; }
   var frameW = 0, frameH = 0;
@@ -234,13 +240,16 @@
   }
   function carRows() {
     var rows = document.querySelectorAll('.carOnly');
-    for (var i = 0; i < rows.length; i++) { rows[i].style.display = set.d === 'car' ? 'block' : 'none'; }
+    for (var i = 0; i < rows.length; i++) {
+      var only1 = rows[i].className.indexOf('mcu1Only') >= 0;
+      rows[i].style.display = set.d === 'car' && (!only1 || mcu1) ? 'block' : 'none';
+    }
   }
   function sendMode() {
     if (!ws || ws.readyState !== 1) { return; }
     vpSent = ''; csSent = '';
     carRows(); applyDock();          // layout() inside sends vp / cs
-    sendVp(); sendCs(); ws.send('ph:' + set.h); ws.send('mode:' + set.d);
+    sendVp(); sendCs(); ws.send('ph:' + set.h); ws.send('mode:' + set.d); ws.send('ad:' + (set.a === 'app' ? 1 : 0));
     if (set.d === 'car') { loadPanel(); }
   }
   function askFull() { if (ws && ws.readyState === 1) { ws.send('full'); } }
@@ -297,6 +306,7 @@
     if (key === 'd') { sendMode(); return; }
     if (key === 'z' || key === 'y' || key === 'r') { sendCs(); return; }
     if (key === 'h') { if (ws && ws.readyState === 1) { ws.send('ph:' + set.h); } return; }
+    if (key === 'a') { freezes = []; if (ws && ws.readyState === 1) { ws.send('ad:' + (set.a === 'app' ? 1 : 0)); } return; }
     if (key === 'p' || key === 'o' || key === 't') { applyDock(); return; }
     sendCfgSoon();
   }
@@ -315,6 +325,7 @@
   buildOptions('p', 'optP', function (v) { return v === 'one' ? 'Одна · One' : v === 'two' ? 'Дві · Two' : 'Вимк · Off'; });
   buildOptions('o', 'optO', function (v) { return { auto: 'Авто', bottom: 'Знизу · Bottom', left: 'Зліва · Left', right: 'Справа · Right' }[v]; });
   buildOptions('t', 'optT', function (v) { return v === 'on' ? 'Показати · Show' : 'Сховати · Hide'; });
+  buildOptions('a', 'optA', function (v) { return v === 'app' ? 'Під додаток · By app' : 'Фіксований · Fixed'; });
   carRows();
 
   // The car screen failed: say why, big, over the picture (the top bar with the status may be hidden).
@@ -324,6 +335,22 @@
       msg.innerHTML = 'Екран «Авто» не запущено · Car screen not running<br><span style="font-size:18px">' + esc(cd) + '</span>';
       msg.style.display = 'block'; carFailShown = true;
     } else if (carFailShown) { msg.style.display = 'none'; carFailShown = false; }
+  }
+
+  // ---- shape by app (MCU1 test): two freezes within a minute → back to the fixed size, and say so ----
+  var freezes = [];
+  function shapeFreeze(t) {
+    if (set.a !== 'app' || set.d !== 'car') { return; }
+    freezes.push(t);
+    while (freezes.length && t - freezes[0] > 60000) { freezes.shift(); }
+    if (freezes.length >= 2) {
+      freezes = [];
+      choose('a', 'fixed');
+      lg('⚠ shape by app: 2 freezes in a minute — back to the fixed size');
+      msg.innerHTML = 'Підвисало — повернуто фіксований розмір екрана · Freezing — back to the fixed size';
+      msg.style.display = 'block';
+      setTimeout(function () { if (!carFailShown) { msg.style.display = 'none'; } }, 6000);
+    }
   }
 
   // ---- black box: tell the phone's log when something freezes here (it keeps the last 30 min) ----
@@ -341,7 +368,7 @@
     // Frozen = the phone sent pictures it is still waiting on (pend), but none arrived here for 3 s.
     // (A still screen sends nothing — that is not a freeze.)
     if ((server.pend || 0) > 0 && t - pictureAt > 3000) {
-      if (!frozeSince) { frozeSince = pictureAt; lg('⚠ freeze: no new picture for ' + ((t - pictureAt) / 1000).toFixed(1) + ' s · view ' + set.v +
+      if (!frozeSince) { frozeSince = pictureAt; shapeFreeze(t); lg('⚠ freeze: no new picture for ' + ((t - pictureAt) / 1000).toFixed(1) + ' s · view ' + set.v +
         ' · phone fps ' + (server.fps || 0) + ' lat ' + (server.lat || 0) + ' net ' + (server.net || 0) + ' waiting ' + (server.pend || 0)); }
     } else if (frozeSince && t - pictureAt < 1500) {
       lg('picture back after ' + ((pictureAt - frozeSince) / 1000).toFixed(1) + ' s'); frozeSince = 0;

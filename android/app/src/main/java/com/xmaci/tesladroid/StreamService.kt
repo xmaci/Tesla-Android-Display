@@ -390,7 +390,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     /** Car asked for a different width: resize the virtual display onto a new reader. */
     private fun resize(width: Int) {
         if (carMode) {
-            car?.let { if (it.mirror) { val (w, h) = frameSize(width); it.resize(w, h, 160) } else { val (w, h, d) = carSize(); it.resize(w, h, d) } }
+            car?.let { if (it.mirror) { val (w, h) = frameSize(width); it.resize(w, h, 160) } else { val (w, h, d) = screenSize(); it.resize(w, h, d) } }
             return
         }
         captureHandler.post {
@@ -812,6 +812,15 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             }
             "lg" -> DiagLog.add("car", text.substring(3), important = text.contains('⚠'))
             "report" -> Thread { sendReport() }.start()
+            // Shape by app (MCU1 test): the helper reports the app on top; Waze gets 9:16, full-screen video 16:9.
+            "ad" -> {
+                adaptive = p.getOrNull(1) == "1"
+                DiagLog.add("shape", "shape by app ${if (adaptive) "on" else "off"}")
+                car?.takeIf { !it.mirror }?.let { c ->
+                    c.watch(adaptive)
+                    if (!adaptive) setShape("fixed")
+                }
+            }
             "ph" -> {
                 dimPhone = p.getOrNull(1) != "normal"
                 car?.takeIf { !it.mirror }?.let { c ->
@@ -824,11 +833,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 val d = p.getOrNull(3)?.toIntOrNull() ?: 0
                 if (w in 160..2560 && h in 160..2560 && d in 80..640 && (w != csW || h != csH || d != csDpi)) {
                     csW = w; csH = h; csDpi = d
-                    car?.let { if (!it.mirror) it.resize(w, h, d) }
+                    car?.let { if (!it.mirror) { val (sw, sh, sd) = screenSize(); it.resize(sw, sh, sd) } }
                 }
             }
             "launch" -> {
-                val c = text.substring(7).trim(); carLaunch = c; car?.launch(c)
+                val c = text.substring(7).trim(); carLaunch = c
+                // Shape first, so the app opens already in its size (no relayout right after it starts).
+                if (adaptive) setShape(if (c.startsWith("com.waze/")) "tall" else "fixed")
+                car?.launch(c)
                 CarApps.addRecent(this, c); panelChanged()
             }
         }
@@ -859,6 +871,40 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     // ---------- car-shaped screen ----------
 
     /** Car screen size: the car's frame width, the shape of its browser area (800×480 until it reports). */
+    // ---- shape by app (MCU1 test) ----
+    @Volatile private var adaptive = false
+    /** fixed = the size chosen on the car page; tall = 9:16 (Waze); wide = 16:9 (full-screen video). */
+    @Volatile private var shape = "fixed"
+
+    /** The car screen size for the current shape: same number of pixels as the fixed size, other proportions. */
+    private fun screenSize(): Triple<Int, Int, Int> {
+        val (w, h, d) = carSize()
+        if (shape == "fixed") return Triple(w, h, d)
+        val px = w.toDouble() * h
+        val a = Math.sqrt(px * 9 / 16)            // short side
+        val b = Math.sqrt(px * 16 / 9)            // long side
+        val s = ((a / 2).toInt()) * 2; val l = ((b / 2).toInt()) * 2
+        return if (shape == "tall") Triple(s, l, d) else Triple(l, s, d)
+    }
+
+    private fun setShape(sh: String) {
+        if (sh == shape) return
+        shape = sh
+        val (w, h, d) = screenSize()
+        DiagLog.add("shape", "car screen $sh → ${w}x$h")
+        car?.takeIf { !it.mirror }?.resize(w, h, d)
+    }
+
+    /** "top <pkg> <orientation>" from the helper. */
+    private fun onTop(pkg: String, orient: String) {
+        if (!adaptive) return
+        setShape(when {
+            orient.contains("LANDSCAPE") -> "wide"            // YouTube / Netflix full screen
+            pkg == "com.waze" -> "tall"
+            else -> "fixed"
+        })
+    }
+
     private fun carSize(): Triple<Int, Int, Int> {
         if (csW > 0) return Triple(csW, csH, csDpi)      // chosen on the car page (⚙ → Screen size / Scale)
         // At least 640 px: MCU1's default 320 would give an unusable ~320×190 screen; 640×370 is still
@@ -949,7 +995,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         car?.let { if (it.mirror) stopCar() else if (it.status.startsWith("✗")) stopCar() else return }   // failed attempt: retry
         // carMode (and pausing the phone mirror) waits for the first car frame: if the helper is missing
         // or fails, the car keeps seeing the phone instead of a frozen picture.
-        val (w, h, d) = carSize()
+        val (w, h, d) = screenSize()
         // No Android system decorations on the car screen: Android 16+ made such a display a "desktop" with
         // the phone's status bar and taskbar (which also showed or hid with the phone's lock state). Our own
         // home and dock replace them; the keyboard stays on the car via the IME policy.
@@ -1014,6 +1060,13 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         if (line.startsWith("OK ") && car?.mirror != true) {
             car?.launch(CAR_HOME)
             if (carLaunch.isNotEmpty() && carLaunch != CAR_HOME) car?.launch(carLaunch)
+            if (adaptive) car?.watch(true)
+        }
+        if (line.startsWith("top ")) {
+            val p = line.split(' ')
+            DiagLog.add("shape", line)
+            onTop(p.getOrElse(1) { "-" }, p.getOrElse(2) { "-" })
+            return
         }
         if (line.startsWith("launch:") || line.startsWith("ERR") || line.startsWith("power:")) conn?.sendText("cd:" + line)
         if (line == "touch: ok") helperTouchOk++

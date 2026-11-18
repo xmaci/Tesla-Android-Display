@@ -72,14 +72,20 @@ class TouchService : AccessibilityService() {
                 val sw = findSwitch(root)
                 if (sw != null) {
                     val was = sw.isChecked
+                    var now = was
                     if (was != on) {
                         var n: android.view.accessibility.AccessibilityNodeInfo? = sw
                         while (n != null && !n.isClickable) n = n.parent
                         (n ?: sw).performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
                         Thread.sleep(800)
+                        now = try { sw.refresh(); sw.isChecked } catch (_: Throwable) { !was }
                     }
                     performGlobalAction(GLOBAL_ACTION_BACK)
-                    return if (was == on) "already ${if (on) "on" else "off"}" else "switched ${if (on) "on" else "off"}"
+                    return when {
+                        was == on -> "already ${if (on) "on" else "off"}"
+                        now == on -> "switched ${if (on) "on" else "off"}"
+                        else -> "pressed, but the switch stayed ${if (was) "on" else "off"}"
+                    }
                 }
             }
             Thread.sleep(200)
@@ -87,16 +93,24 @@ class TouchService : AccessibilityService() {
         return "hotspot switch not found"
     }
 
+    /** The hotspot page's main switch: the top-most switch on screen (others below are options such as
+     *  "Turn off hotspot automatically", which must not be pressed). */
     private fun findSwitch(root: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
         val q = ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
         q.add(root)
+        var best: android.view.accessibility.AccessibilityNodeInfo? = null
+        var bestTop = Int.MAX_VALUE
+        val r = android.graphics.Rect()
         while (q.isNotEmpty()) {
             val n = q.removeFirst()
             val cls = n.className?.toString() ?: ""
-            if (n.isCheckable && (cls.contains("Switch") || cls.contains("CompoundButton") || cls.contains("Toggle"))) return n
+            if (n.isCheckable && n.isVisibleToUser && (cls.contains("Switch") || cls.contains("CompoundButton") || cls.contains("Toggle"))) {
+                n.getBoundsInScreen(r)
+                if (r.top < bestTop) { bestTop = r.top; best = n }
+            }
             for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
         }
-        return null
+        return best
     }
 
     fun key(name: String): Boolean = when (name) {

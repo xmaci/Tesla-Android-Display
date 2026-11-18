@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.13"
+        const val VERSION = "0.15.14"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -376,15 +376,7 @@ class MainActivity : Activity() {
 
     // ---------- checks ----------
 
-    /** Hotspot is on if an access-point style interface has an IPv4 address (names differ by phone). */
-    private fun hotspotOn(): Boolean = try {
-        java.net.NetworkInterface.getNetworkInterfaces().toList().any { ni ->
-            val n = ni.name.lowercase()
-            ni.isUp && (n.startsWith("ap") || n.startsWith("swlan") || n.startsWith("softap") ||
-                Regex("wlan[1-9]").matches(n)) &&
-                ni.inetAddresses.toList().any { it is java.net.Inet4Address && !it.isLoopbackAddress }
-        }
-    } catch (_: Exception) { false }
+    private fun hotspotOn(): Boolean = HotspotCtl.isOn()
 
     /** The phone itself is connected to a Wi‑Fi network (breaks streaming while the hotspot is on). */
     @Suppress("DEPRECATION")

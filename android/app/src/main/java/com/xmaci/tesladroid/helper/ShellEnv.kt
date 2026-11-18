@@ -160,18 +160,23 @@ object Hotspot {
      * TETHER_PRIVILEGED there, but tethering also accepts callers allowed to modify system settings
      * (WRITE_SETTINGS app-op) — the shell user may grant itself that, then we try once more.
      */
-    fun set(on: Boolean): String {
-        val r = setOnce(on)
-        if (!r.contains("error 14")) return r
-        try {
-            ProcessBuilder("appops", "set", "com.android.shell", "WRITE_SETTINGS", "allow")
-                .redirectErrorStream(true).start().waitFor()
-        } catch (_: Exception) {}
-        return setOnce(on).let { if (it.contains("error 14")) "$it (also with WRITE_SETTINGS)" else it }
+    fun set(on: Boolean): String = setOnce(on)
+
+    private fun asShell(tm: Any) {
+        var c: Class<*>? = tm.javaClass
+        while (c != null) {
+            try { c.getDeclaredField("mContext").apply { isAccessible = true }.set(tm, ShellEnv.context); return }
+            catch (_: NoSuchFieldException) { c = c.superclass }
+        }
     }
 
     private fun setOnce(on: Boolean): String = try {
         val tm = ShellEnv.context.getSystemService("tethering") ?: return "no tethering service"
+        // The manager comes from the system context, so it called Tethering as package "android" from the
+        // shell uid: Tethering rejected the mismatch with error 14 (TETHER_ERROR_NO_CHANGE_TETHERING_PERMISSION),
+        // though the shell user holds TETHER_PRIVILEGED. It reads the caller package from its mContext at
+        // each call, so give it our com.android.shell context.
+        asShell(tm)
         if (!on) {
             tm.javaClass.getMethod("stopTethering", Int::class.javaPrimitiveType).invoke(tm, TETHERING_WIFI)
             "hotspot off"

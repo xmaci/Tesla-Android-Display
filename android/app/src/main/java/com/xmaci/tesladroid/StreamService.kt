@@ -64,6 +64,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         const val EXTRA_DATA = "data"
         const val ACTION_STOP = "stop"
         const val EXTRA_USER_STOP = "user_stop"
+        /** Stops by itself after this long without the Tesla. */
+        const val AUTO_STOP_MS = 5 * 60_000L
 
         @Volatile var running = false
             private set
@@ -336,6 +338,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
         running = true
         status = "streaming"
+        captureHandler.removeCallbacks(autoStop); captureHandler.postDelayed(autoStop, AUTO_STOP_MS)
         // Stop interrupts this thread while it waits: that is its normal end, not a crash (it used to
         // kill the whole app — and with it the hotspot switch-off — after every Stop).
         sender = Thread({ try { sendLoop() } catch (_: InterruptedException) {} }, "sender").apply { start() }
@@ -735,6 +738,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     override fun onOpen(conn: CarServer.Conn) {
         captureHandler.removeCallbacks(carGone)
+        captureHandler.removeCallbacks(autoStop)
         captureHandler.removeCallbacks(pipeLog)
         captureHandler.postDelayed(pipeLog, 2000)
         car?.takeIf { carMode && !it.mirror && dimPhone }?.keepAwake(true)
@@ -753,6 +757,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         DiagLog.add("car", "⚠ disconnected", important = true)
         synchronized(lock) { if (this.conn === conn) { this.conn = null; carConnected = false } }
         if (carMode) { captureHandler.removeCallbacks(carGone); captureHandler.postDelayed(carGone, 120_000) }
+        captureHandler.removeCallbacks(autoStop); captureHandler.postDelayed(autoStop, AUTO_STOP_MS)
     }
 
     override fun onText(conn: CarServer.Conn, text: String) {
@@ -907,6 +912,20 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     private var powerRegistered = false
 
     /** Car gone for 2 minutes: brightness back, let the phone sleep normally. */
+    /**
+     * No Tesla for 5 minutes (never connected after Start, or gone since): stop everything as Stop does —
+     * streaming, the car link and the hotspot if TeslaDroid switched it on — so a forgotten session does not
+     * drain the battery.
+     */
+    private val autoStop = Runnable {
+        if (!running || carConnected) return@Runnable
+        DiagLog.add("strm", "no Tesla for ${AUTO_STOP_MS / 60_000} min — stopping by itself", important = true)
+        val ours = HotspotCtl.takeOurs(this)
+        if (ours) HotspotCtl.switch(this, false, true, backTo = null)
+        CarVpnService.stop(this)
+        stopSelf()
+    }
+
     private val carGone = Runnable {
         val c = car ?: return@Runnable
         if (carMode && !carConnected && !c.mirror) {

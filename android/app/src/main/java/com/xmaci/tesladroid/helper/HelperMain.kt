@@ -30,7 +30,7 @@ import kotlin.system.exitProcess
  */
 object HelperMain {
     const val PORT = 7790
-    const val VERSION = 16
+    const val VERSION = 17
 
     private var server: ServerSocket? = null
 

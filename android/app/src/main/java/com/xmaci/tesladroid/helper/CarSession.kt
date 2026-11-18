@@ -277,7 +277,9 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         // Already running (e.g. back to YouTube after Waze): bring its task back like the recents screen
         // does. A second `am start` of a running task asked to unlock the phone first.
         Tasks.lastError = null
-        Tasks.resume(component.substringBefore('/'), displayId)?.let { text("launch: $it"); return }
+        // Not for TeslaDroid itself: its task is the phone app, not the car home (● opened the app instead).
+        if (!component.startsWith("com.xmaci.tesladroid/"))
+            Tasks.resume(component.substringBefore('/'), displayId)?.let { text("launch: $it"); return }
         Tasks.lastError?.let { text("launch: $it") }
         val pr = ProcessBuilder("/system/bin/am", "start", "--display", displayId.toString(),
             "-f", "0x10000000", "--windowingMode", "1", "-n", component).redirectErrorStream(true).start()

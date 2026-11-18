@@ -63,6 +63,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val ACTION_STOP = "stop"
+        const val EXTRA_USER_STOP = "user_stop"
 
         @Volatile var running = false
             private set
@@ -237,7 +238,15 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         self = this
         DiagLog.init(this)
         if (intent?.action == ACTION_STOP) {
-            shutdown(); stopSelf(); return START_NOT_STICKY
+            // Stop from the notification ends everything, like Stop in the app: car link, and the hotspot
+            // if TeslaDroid switched it on. (The app's own Stop already took the hotspot: nothing twice.)
+            val user = intent.getBooleanExtra(EXTRA_USER_STOP, false)
+            shutdown(); stopSelf()
+            if (user) {
+                CarVpnService.stop(this)
+                if (HotspotCtl.takeOurs(this)) HotspotCtl.switch(this, false, true, backTo = null)   // no helper: that step fails fast
+            }
+            return START_NOT_STICKY
         }
         if (intent?.getBooleanExtra(EXTRA_HELPER, false) == true) {
             // No screen capture at all: the helper makes the picture (no recording chip, no dialog).
@@ -1052,7 +1061,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Streaming", NotificationManager.IMPORTANCE_LOW))
         val stop = PendingIntent.getService(this, 0,
-            Intent(this, StreamService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
+            Intent(this, StreamService::class.java).setAction(ACTION_STOP).putExtra(EXTRA_USER_STOP, true), PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)

@@ -32,6 +32,16 @@ object DiagLog {
     @Synchronized fun init(ctx: Context) {
         if (appCtx != null) return
         appCtx = ctx.applicationContext
+        // A crash goes into the black box (with where it happened) before the app dies.
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val at = e.stackTrace.take(6).joinToString(" < ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+                add("crash", "thread ${t.name}: ${e.javaClass.simpleName} ${e.message} @ $at", important = true)
+                save()
+            } catch (_: Throwable) {}
+            prev?.uncaughtException(t, e)
+        }
         val f = File(ctx.filesDir, FILE)
         val cutoff = System.currentTimeMillis() - KEEP_MS
         if (f.exists()) try {

@@ -336,7 +336,9 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
         running = true
         status = "streaming"
-        sender = Thread({ sendLoop() }, "sender").apply { start() }
+        // Stop interrupts this thread while it waits: that is its normal end, not a crash (it used to
+        // kill the whole app — and with it the hotspot switch-off — after every Stop).
+        sender = Thread({ try { sendLoop() } catch (_: InterruptedException) {} }, "sender").apply { start() }
     }
 
     private val rotationListener = object : DisplayManager.DisplayListener {

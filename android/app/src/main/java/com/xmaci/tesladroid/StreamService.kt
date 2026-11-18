@@ -241,11 +241,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             // Stop from the notification ends everything, like Stop in the app: car link, and the hotspot
             // if TeslaDroid switched it on. (The app's own Stop already took the hotspot: nothing twice.)
             val user = intent.getBooleanExtra(EXTRA_USER_STOP, false)
-            shutdown(); stopSelf()
             if (user) {
+                val ours = HotspotCtl.takeOurs(this)
+                DiagLog.add("strm", "Stop in the notification · hotspot ours=$ours")
+                // Hotspot first: closing the stream may take a moment and must not hold it up.
+                if (ours) HotspotCtl.switch(this, false, true, backTo = null)   // no helper: that step fails fast
                 CarVpnService.stop(this)
-                if (HotspotCtl.takeOurs(this)) HotspotCtl.switch(this, false, true, backTo = null)   // no helper: that step fails fast
             }
+            stopSelf()          // onDestroy closes everything, off the main thread
             return START_NOT_STICKY
         }
         if (intent?.getBooleanExtra(EXTRA_HELPER, false) == true) {
@@ -1030,7 +1033,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     // ---------- teardown ----------
 
-    private fun shutdown() {
+    @Synchronized private fun shutdown() {
         if (running) DiagLog.add("strm", "stop · $status", important = true)
         running = false
         stopCar()
@@ -1052,8 +1055,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     override fun onDestroy() {
         if (self === this) self = null
         try { getSystemService(DisplayManager::class.java).unregisterDisplayListener(rotationListener) } catch (_: Exception) {}
-        shutdown()
-        captureThread.quitSafely()
+        // Closing the car connection can block on a stalled socket: never on the main thread (it froze the
+        // app — "TeslaDroid isn't responding" — after Stop).
+        val ct = captureThread
+        Thread({ try { shutdown() } catch (t: Throwable) { Log.w(TAG, "shutdown", t) }; ct.quitSafely() }, "shutdown").start()
         super.onDestroy()
     }
 

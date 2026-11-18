@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.11"
+        const val VERSION = "0.15.12"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -349,10 +349,12 @@ class MainActivity : Activity() {
     }
 
     private fun stopAll() {
+        // Hotspot off first, and only if TeslaDroid switched it on (one the user had on stays on).
+        val ours = HotspotCtl.takeOurs(this)
+        DiagLog.add("strm", "Stop in the app · hotspot ours=$ours")
+        if (ours) switchHotspot(false)
         StreamService.stop(this)
         CarVpnService.stop(this)
-        // Hotspot off only if TeslaDroid switched it on (one the user had on stays on).
-        if (HotspotCtl.takeOurs(this)) switchHotspot(false)
         ui.postDelayed({ refresh() }, 300)
     }
 

@@ -57,10 +57,27 @@ class AutoHelperJob : JobService() {
             } catch (t: Throwable) { Log.w(TAG, "schedule auto helper", t) }
         }
 
+        /**
+         * Android forgets a Wireless-debugging pairing that has not been used for 7 days
+         * (adb_allowed_connection_time) and asks to pair again. 0 = never forget (the developer option
+         * "Disable adb authorization timeout"). Needs WRITE_SECURE_SETTINGS.
+         */
+        fun keepPairing(ctx: Context) {
+            if (!canAutoStart(ctx)) return
+            try {
+                val cr = ctx.contentResolver
+                if (Settings.Global.getLong(cr, "adb_allowed_connection_time", -1L) != 0L) {
+                    Settings.Global.putLong(cr, "adb_allowed_connection_time", 0L)
+                    DiagLog.add("help", "pairing set to never expire")
+                }
+            } catch (t: Throwable) { Log.w(TAG, "keep pairing", t) }
+        }
+
         fun canAutoStart(ctx: Context) =
             ctx.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 
         @Synchronized fun tryStart(ctx: Context): String {
+            keepPairing(ctx)
             val r = attempt(ctx)
             val line = SimpleDateFormat("dd.MM HH:mm", Locale.US).format(Date()) + " " + r
             ctx.getSharedPreferences("tesladroid", Context.MODE_PRIVATE).edit().putString("auto_helper", line).apply()

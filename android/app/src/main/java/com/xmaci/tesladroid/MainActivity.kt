@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.9"
+        const val VERSION = "0.15.10"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -241,7 +241,7 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { setBackgroundColor(Color.rgb(17, 17, 17)); addView(col) })
     }
 
-    override fun onResume() { super.onResume(); ui.post(tick); autoStartHelper() }
+    override fun onResume() { super.onResume(); ui.post(tick); AutoHelperJob.keepPairing(this); autoStartHelper() }
 
     private val helperStarting = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var startingSince = 0L

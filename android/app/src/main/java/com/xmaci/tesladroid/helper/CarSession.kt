@@ -278,6 +278,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
      *  treats a display with system decorations as a desktop and opened apps in small floating windows. */
     private fun launch(component: String) {
         if (!component.matches(Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+"))) { text("launch: bad name"); return }
+        noPip(component.substringBefore('/'))
         // Already running (e.g. back to YouTube after Waze): bring its task back like the recents screen
         // does. A second `am start` of a running task asked to unlock the phone first.
         Tasks.lastError = null
@@ -340,6 +341,46 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
 
     @Volatile private var watching = false
 
+    /**
+     * Picture-in-picture off for apps on the car screen while it runs (restored when it closes): YouTube
+     * shrank into a PiP window when another app opened, and a display without system decorations has no
+     * PiP, so Android moved it to the phone (report 19.11: YouTube on the phone, not on the car).
+     */
+    private val pipSaved = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun appops(vararg a: String): String = try {
+        val pr = ProcessBuilder(listOf("appops") + a).redirectErrorStream(true).start()
+        pr.inputStream.bufferedReader().readText().also { pr.waitFor() }
+    } catch (_: Exception) { "" }
+
+    private fun noPip(pkg: String) {
+        if (pkg == "com.xmaci.tesladroid" || pipSaved.containsKey(pkg)) return
+        val was = Regex("PICTURE_IN_PICTURE: (\\w+)").find(appops("get", pkg, "PICTURE_IN_PICTURE"))?.groupValues?.get(1) ?: "default"
+        pipSaved[pkg] = was
+        savePip()
+        appops("set", pkg, "PICTURE_IN_PICTURE", "ignore")
+        text("pip off: $pkg (was $was)")
+    }
+
+    private fun restorePip() {
+        for ((pkg, mode) in pipSaved) appops("set", pkg, "PICTURE_IN_PICTURE", mode)
+        pipSaved.clear()
+        pipFile.delete()
+    }
+
+    // Kept on disk too: if the helper dies mid-session, the next session puts PiP back first.
+    private val pipFile = java.io.File("/data/local/tmp/tesladroid-pip.txt")
+    private fun savePip() = try { pipFile.writeText(pipSaved.entries.joinToString("\n") { "${it.key} ${it.value}" }) } catch (_: Exception) {}
+
+    init {
+        try {
+            if (pipFile.exists()) {
+                pipFile.readLines().forEach { l -> l.split(' ').takeIf { it.size == 2 }?.let { appops("set", it[0], "PICTURE_IN_PICTURE", it[1]) } }
+                pipFile.delete()
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun watch(on: Boolean) {
         if (on == watching) return
         watching = on
@@ -352,6 +393,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             var last = ""
             while (watching && !closed) {
                 val pkg = Tasks.top(displayId)
+                if (pkg != null) noPip(pkg)
                 // Orientation only for apps that may go full screen (dumpsys costs a little): not ours, not Waze.
                 val o = if (pkg == null || pkg == "com.xmaci.tesladroid" || pkg == "com.waze") "-" else Tasks.orientation(pkg)
                 val line = "top ${pkg ?: "-"} $o"
@@ -368,6 +410,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
         if (panelOff) { Panel.set(true); panelOff = false }   // never leave the phone with a dark panel
         dim(false)                                           // nor dimmed
         keepAwake(false)
+        Thread { restorePip() }.start()
         handler.post {
             try { display?.release() } catch (_: Throwable) {}
             display = null

@@ -30,12 +30,19 @@ object Tasks {
         return (m.invoke(a, *args) as? List<Any>) ?: emptyList()
     }
 
+    private fun windowingMode(ti: Any): Int = try {
+        val cfg = ti.javaClass.getField("configuration").get(ti)!!
+        val wc = cfg.javaClass.getField("windowConfiguration").get(cfg)!!
+        wc.javaClass.getMethod("getWindowingMode").invoke(wc) as Int
+    } catch (_: Throwable) { 0 }
+
     /** Package of the app on top of [displayId] (tasks come most recent first), or null. */
     fun top(displayId: Int): String? = try {
         tasks().firstOrNull { ti ->
             val c = ti.javaClass
             c.getField("displayId").getInt(ti) == displayId &&
-                (try { c.getField("isVisible").getBoolean(ti) } catch (_: Throwable) { true })
+                (try { c.getField("isVisible").getBoolean(ti) } catch (_: Throwable) { true }) &&
+                windowingMode(ti) != 2          // not a picture-in-picture window (it floats over the real top)
         }?.let { ti -> (ti.javaClass.getField("topActivity").get(ti) as? android.content.ComponentName)?.packageName }
     } catch (_: Throwable) { null }
 

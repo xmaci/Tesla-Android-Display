@@ -839,7 +839,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             "launch" -> {
                 val c = text.substring(7).trim(); carLaunch = c
                 // Shape first, so the app opens already in its size (no relayout right after it starts).
-                if (adaptive) setShape(if (c.startsWith("com.waze/")) "tall" else "fixed")
+                if (adaptive) { launchedAt = SystemClock.uptimeMillis(); setShape(if (c.startsWith("com.waze/")) "tall" else "fixed") }
                 car?.launch(c)
                 CarApps.addRecent(this, c); panelChanged()
             }
@@ -895,11 +895,37 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         car?.takeIf { !it.mirror }?.resize(w, h, d)
     }
 
-    /** "top <pkg> <orientation>" from the helper. */
+    private var lastTop = ""
+    private var topSince = 0L
+    /** Set when TeslaDroid itself opened an app: its shape is already set, the watcher waits a moment. */
+    @Volatile private var launchedAt = 0L
+    private val videoApps = setOf("com.google.android.youtube", "com.netflix.mediaclient")
+
+    /**
+     * "top <pkg> <orientation>" from the helper (every 0.7 s on change). Report 19.11: the top flickers
+     * for a moment (a Google sign-in sheet, "-" while locking, the old app while the new one opens) — so a
+     * new top must hold for ~1.4 s, and nothing changes for 3 s after TeslaDroid opened an app itself.
+     * Full screen video: YouTube asked for NOSENSOR (not LANDSCAPE) on the car screen; once 16:9 it may
+     * ask for nothing (UNSPECIFIED), so 16:9 stays until the app asks for portrait or another app comes up.
+     */
     private fun onTop(pkg: String, orient: String) {
         if (!adaptive) return
+        val now = SystemClock.uptimeMillis()
+        val key = "$pkg $orient"
+        if (key != lastTop) {
+            lastTop = key; topSince = now
+            // Check again once it has held; a newer top in between makes this one stale.
+            captureHandler.postDelayed({ if (lastTop == key) onTop(pkg, orient) }, 1500)
+            return
+        }
+        if (now - topSince < 1400) return
+        if (now - launchedAt < 3000) { captureHandler.postDelayed({ if (lastTop == key) onTop(pkg, orient) }, 3000 - (now - launchedAt) + 50); return }
+        if (pkg == "-" || pkg == "com.google.android.gms" || pkg == "android") return
+        val full = orient.contains("LANDSCAPE") || (orient.contains("NOSENSOR") && pkg in videoApps)
+        val portrait = orient.contains("PORTRAIT") || orient.endsWith("_USER")
         setShape(when {
-            orient.contains("LANDSCAPE") -> "wide"            // YouTube / Netflix full screen
+            full -> "wide"
+            shape == "wide" && pkg in videoApps && !portrait -> "wide"
             pkg == "com.waze" -> "tall"
             else -> "fixed"
         })

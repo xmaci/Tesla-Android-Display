@@ -755,6 +755,8 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     override fun onOpen(conn: CarServer.Conn) {
         fromCarAt = SystemClock.uptimeMillis()
+        // A page left open across an app update reloads itself when this differs from what it saw first.
+        try { conn.sendText("ver:${MainActivity.VERSION}") } catch (_: Throwable) {}
         captureHandler.removeCallbacks(carGone)
         captureHandler.removeCallbacks(autoStop)
         captureHandler.removeCallbacks(pipeLog)

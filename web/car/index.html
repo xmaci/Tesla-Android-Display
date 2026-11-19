@@ -581,7 +581,7 @@
   // "open" here with nobody on the other end (no close ever arrives): the last picture stayed, nothing
   // responded, and only loading another site and coming back helped. The phone sends stats every 2 s, so
   // 7 s of silence = dead: drop it and connect again. A connect that hangs is dropped after 6 s too.
-  var lastMsgAt = 0, openingAt = 0;
+  var lastMsgAt = 0, openingAt = 0, appVer = '';
   function dropWs(why) {
     var old = ws; ws = null;
     if (old) { old.onopen = old.onclose = old.onmessage = old.onerror = null; try { old.close(); } catch (e) {} }
@@ -639,6 +639,11 @@
         showStats();
       }
       else if (d === 'pn') { loadPanel(); }
+      // The app was updated while this page stayed open (it reconnects by itself): load the new page.
+      else if (d.indexOf('ver:') === 0) {
+        if (!appVer) { appVer = d.substr(4); }
+        else if (appVer !== d.substr(4)) { lg('app updated ' + appVer + ' → ' + d.substr(4) + ': reloading the page'); setTimeout(function () { location.reload(); }, 300); }
+      }
       else if (d.indexOf('sh:') === 0) {
         var sp = d.split(':'), ns = sp[1], nv = sp[2] === '1';
         if (ns !== shapeInfo.s) { shapeAt = now(); }

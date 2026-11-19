@@ -545,8 +545,27 @@
   applyDock();
 
   // ---- connection ----
+  // Dead connection watchdog. The car sleeping or its Wi-Fi reconnecting leaves the old connection
+  // "open" here with nobody on the other end (no close ever arrives): the last picture stayed, nothing
+  // responded, and only loading another site and coming back helped. The phone sends stats every 2 s, so
+  // 7 s of silence = dead: drop it and connect again. A connect that hangs is dropped after 6 s too.
+  var lastMsgAt = 0, openingAt = 0;
+  function dropWs(why) {
+    var old = ws; ws = null;
+    if (old) { old.onopen = old.onclose = old.onmessage = old.onerror = null; try { old.close(); } catch (e) {} }
+    if (!closedAt) { closedAt = now(); }
+    msg.style.display = 'block'; msg.innerHTML = 'Перепідключення… · Reconnecting… (' + why + ')';
+    retry = null; connect();
+  }
+  setInterval(function () {
+    if (!ws) { return; }
+    var t = now();
+    if (ws.readyState === 1 && lastMsgAt && t - lastMsgAt > 7000) { dropWs('phone silent'); }
+    else if (ws.readyState === 0 && openingAt && t - openingAt > 6000) { dropWs('connect timeout'); }
+  }, 1000);
   function connect() {
     retry = null;
+    openingAt = now(); lastMsgAt = 0;
     try { ws = new WebSocket('ws://' + location.host + '/ws'); } catch (e) { schedule(); return; }
     ws.binaryType = 'arraybuffer';
     ws.onopen = function () {
@@ -554,7 +573,7 @@
       for (var i = 0; i < ready.length; i++) { URLx.revokeObjectURL(ready[i].url); release(ready[i].img); }
       queue = []; decoding = false; ready = []; playing = false;
       if (presentTimer) { clearTimeout(presentTimer); presentTimer = null; }
-      connGen++;
+      connGen++; lastMsgAt = now();
       msg.style.display = 'none'; sendCfg(); sendMode();
       blackBoxHello();
       if (isMj() && everOpen) { mjOn = false; layout(); }   // reopen the stream only after a reconnect
@@ -576,6 +595,7 @@
   var lastArrive = 0, interval = 66, gaps = [], autoTarget = 0;
 
   function onMessage(ev) {
+    lastMsgAt = now();
     if (typeof ev.data === 'string') {
       var d = ev.data;
       if (d.indexOf('s:') === 0) {

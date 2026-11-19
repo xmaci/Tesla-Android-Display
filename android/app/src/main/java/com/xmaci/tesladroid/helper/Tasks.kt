@@ -15,6 +15,48 @@ object Tasks {
         try { Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null) } catch (_: Throwable) { null }
     }
 
+    private fun tasks(): List<Any> {
+        val a = atm ?: return emptyList()
+        val m = a.javaClass.methods.filter { it.name == "getTasks" }.minByOrNull { it.parameterTypes.size } ?: return emptyList()
+        var firstInt = true
+        val args = m.parameterTypes.map { t ->
+            when (t) {
+                Int::class.javaPrimitiveType -> if (firstInt) { firstInt = false; 100 } else -1
+                Boolean::class.javaPrimitiveType -> false
+                else -> null
+            }
+        }.toTypedArray()
+        @Suppress("UNCHECKED_CAST")
+        return (m.invoke(a, *args) as? List<Any>) ?: emptyList()
+    }
+
+    private fun windowingMode(ti: Any): Int = try {
+        val cfg = ti.javaClass.getField("configuration").get(ti)!!
+        val wc = cfg.javaClass.getField("windowConfiguration").get(cfg)!!
+        wc.javaClass.getMethod("getWindowingMode").invoke(wc) as Int
+    } catch (_: Throwable) { 0 }
+
+    /** Package of the app on top of [displayId] (tasks come most recent first), or null. */
+    fun top(displayId: Int): String? = try {
+        tasks().firstOrNull { ti ->
+            val c = ti.javaClass
+            c.getField("displayId").getInt(ti) == displayId &&
+                (try { c.getField("isVisible").getBoolean(ti) } catch (_: Throwable) { true }) &&
+                windowingMode(ti) != 2          // not a picture-in-picture window (it floats over the real top)
+        }?.let { ti -> (ti.javaClass.getField("topActivity").get(ti) as? android.content.ComponentName)?.packageName }
+    } catch (_: Throwable) { null }
+
+    /**
+     * The orientation [pkg]'s top activity asks for right now (YouTube asks for landscape in full screen),
+     * from `dumpsys activity activities <pkg>`: "requestedOrientation=SENSOR_LANDSCAPE" etc. "?" if unknown.
+     */
+    fun orientation(pkg: String): String = try {
+        val pr = ProcessBuilder("dumpsys", "activity", "activities", pkg).redirectErrorStream(true).start()
+        val line = pr.inputStream.bufferedReader().useLines { seq -> seq.firstOrNull { it.contains("requestedOrientation=") } }
+        pr.destroy()
+        line?.substringAfter("requestedOrientation=")?.trim()?.substringBefore(' ') ?: "?"
+    } catch (_: Throwable) { "?" }
+
     /** taskId of [pkg]'s task (base or top activity), or null. */
     private fun findTask(pkg: String): Int? {
         val a = atm ?: return null
@@ -35,6 +77,22 @@ object Tasks {
             if (comp("baseActivity") == pkg || comp("topActivity") == pkg) return c.getField("taskId").getInt(ti)
         }
         return null
+    }
+
+    /** Removes [pkg]'s task(s) like swiping them away in recent apps (shell holds REMOVE_TASKS). */
+    fun close(pkg: String): String {
+        if (!pkg.matches(Regex("[A-Za-z0-9_.]+")) || pkg == "com.xmaci.tesladroid") return "$pkg: not closed"
+        var n = 0
+        try {
+            val a = atm!!
+            val rm = a.javaClass.getMethod("removeTask", Int::class.javaPrimitiveType)
+            while (n < 5) {
+                val id = findTask(pkg) ?: break
+                if (rm.invoke(a, id) != true) break
+                n++
+            }
+        } catch (_: Throwable) {}
+        return if (n > 0) "$pkg closed" else "$pkg not running"
     }
 
     /** Short result for the black box, or null when there is no task (then `am start` opens the app). */

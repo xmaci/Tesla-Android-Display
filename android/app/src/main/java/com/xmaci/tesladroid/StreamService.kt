@@ -717,6 +717,14 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         override fun run() {
             val c = conn ?: return
             if (!c.open) return
+            // The car went away without closing (sleep, Wi-Fi reconnect): close our end, so frames stop piling
+            // into a dead socket and the page's new connection is the only one.
+            if (fromCarAt > 0 && SystemClock.uptimeMillis() - fromCarAt > 10_000) {
+                DiagLog.add("car", "⚠ car silent 10 s — closing the dead connection", important = true)
+                fromCarAt = 0
+                try { c.close() } catch (_: Throwable) {}
+                return
+            }
             var oldest = 0L; var pend = 0
             synchronized(lock) {
                 pend = inFlight.size
@@ -737,6 +745,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
     }
 
     override fun onOpen(conn: CarServer.Conn) {
+        fromCarAt = SystemClock.uptimeMillis()
         captureHandler.removeCallbacks(carGone)
         captureHandler.removeCallbacks(autoStop)
         captureHandler.removeCallbacks(pipeLog)
@@ -760,7 +769,11 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         captureHandler.removeCallbacks(autoStop); captureHandler.postDelayed(autoStop, AUTO_STOP_MS)
     }
 
+    /** Last message from the car page (it pings every 2 s): silence = the car is gone without closing. */
+    @Volatile private var fromCarAt = 0L
+
     override fun onText(conn: CarServer.Conn, text: String) {
+        fromCarAt = SystemClock.uptimeMillis()
         val p = text.split(":")
         when (p[0]) {
             "ack" -> synchronized(lock) {

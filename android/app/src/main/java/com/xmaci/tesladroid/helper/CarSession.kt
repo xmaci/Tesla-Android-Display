@@ -239,6 +239,7 @@ class CarSession(private val sock: Socket, private val input: BufferedReader,
             // orientation it asks for ("top <pkg> <orientation>"); the app then resizes the screen. While on,
             // the car screen ignores orientation requests (no turning sideways; the app picks a 16:9 size).
             "watch" -> watch(p[1] == "on")
+            "close" -> text("close: " + Tasks.close(p[1]))
             // dim: the phone was locked with the power key — wake it (stays locked) at minimum brightness.
             // undim: unlocked by the user — brightness back. (Replaces switching the panel off, which made
             // touch fail and the screen flash on some phones.)

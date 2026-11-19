@@ -69,6 +69,11 @@ object CarApps {
     /** Apps last opened on the car screen, newest first (favourites included). */
     fun recents(ctx: Context): List<String> = load(ctx, "rec") ?: emptyList()
 
+    fun removeRecent(ctx: Context, component: String) {
+        val list = load(ctx, "rec") ?: return
+        if (list.remove(component)) save(ctx, "rec", list)
+    }
+
     fun addRecent(ctx: Context, component: String) {
         if (component == StreamService.CAR_HOME) return
         val list = load(ctx, "rec") ?: mutableListOf()

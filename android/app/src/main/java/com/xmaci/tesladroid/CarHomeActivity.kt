@@ -33,6 +33,7 @@ class CarHomeActivity : Activity() {
     private var apps: List<App> = emptyList()
     private var all: List<App> = emptyList()
     private lateinit var title: TextView
+    private lateinit var closeAll: TextView
     private lateinit var grid: GridView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,6 +52,15 @@ class CarHomeActivity : Activity() {
             setOnItemClickListener { _, _, pos, _ -> apps.getOrNull(pos)?.let { StreamService.launchOnCar(it.component) } }
             // Long press: pin to / unpin from the car panel
             setOnItemLongClickListener { _, _, pos, _ ->
+                // Recent apps: long press closes the app (like swiping it away).
+                if (recentMode) {
+                    apps.getOrNull(pos)?.let {
+                        StreamService.closeOnCar(it.component)
+                        android.widget.Toast.makeText(this@CarHomeActivity, "✕ ${it.label} — закрито · closed", android.widget.Toast.LENGTH_SHORT).show()
+                        grid.postDelayed({ show() }, 300)
+                    }
+                    return@setOnItemLongClickListener true
+                }
                 apps.getOrNull(pos)?.let {
                     val on = CarApps.toggleFavourite(this@CarHomeActivity, it.component)
                     android.widget.Toast.makeText(this@CarHomeActivity,
@@ -67,10 +77,22 @@ class CarHomeActivity : Activity() {
             setPadding(dp(24), dp(16), dp(24), 0); setBackgroundColor(Color.parseColor("#111111"))
             text = "Останні · Recent"; visibility = View.GONE
         }
+        // "Close all" (not Waze: navigation must not stop by accident).
+        closeAll = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 20f
+            setPadding(dp(24), dp(12), dp(24), dp(12))
+            setBackgroundColor(Color.parseColor("#3a3a3a"))
+            text = "✕ Закрити всі (крім Waze) · Close all"; visibility = View.GONE
+            setOnClickListener {
+                CarApps.recents(this@CarHomeActivity).filter { !it.startsWith("com.waze/") }.forEach { StreamService.closeOnCar(it) }
+                postDelayed({ show() }, 500)
+            }
+        }
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#111111"))
             addView(title)
+            addView(closeAll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), dp(8), 0, dp(4)) })
             addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         })
 
@@ -118,6 +140,8 @@ class CarHomeActivity : Activity() {
             CarApps.recents(this).mapNotNull { by[it] }
         } else all
         title.visibility = if (recentMode) View.VISIBLE else View.GONE
+        closeAll.visibility = if (recentMode && apps.isNotEmpty()) View.VISIBLE else View.GONE
+        if (recentMode) title.text = "Останні · Recent — довге натискання закриває · long press closes"
         (grid.adapter as? BaseAdapter)?.notifyDataSetChanged()
     }
 

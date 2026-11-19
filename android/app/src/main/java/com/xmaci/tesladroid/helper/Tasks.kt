@@ -79,6 +79,22 @@ object Tasks {
         return null
     }
 
+    /** Removes [pkg]'s task(s) like swiping them away in recent apps (shell holds REMOVE_TASKS). */
+    fun close(pkg: String): String {
+        if (!pkg.matches(Regex("[A-Za-z0-9_.]+")) || pkg == "com.xmaci.tesladroid") return "$pkg: not closed"
+        var n = 0
+        try {
+            val a = atm!!
+            val rm = a.javaClass.getMethod("removeTask", Int::class.javaPrimitiveType)
+            while (n < 5) {
+                val id = findTask(pkg) ?: break
+                if (rm.invoke(a, id) != true) break
+                n++
+            }
+        } catch (_: Throwable) {}
+        return if (n > 0) "$pkg closed" else "$pkg not running"
+    }
+
     /** Short result for the black box, or null when there is no task (then `am start` opens the app). */
     fun resume(pkg: String, displayId: Int): String? = try {
         val id = findTask(pkg)

@@ -338,9 +338,11 @@
   }
 
   // ---- shape by app (MCU1 test): two freezes within a minute → back to the fixed size, and say so ----
-  var freezes = [];
+  var freezes = [], shapeInfo = { s: 'fixed', v: false }, shapeAt = 0;
   function shapeFreeze(t) {
-    if (set.a !== 'app' || set.d !== 'car') { return; }
+    // Only freezes within a minute after the shape changed count: other apps freezing on their own
+    // (report 19.11: the Tesla app) must not switch the mode off.
+    if (set.a !== 'app' || set.d !== 'car' || t - shapeAt > 60000) { return; }
     freezes.push(t);
     while (freezes.length && t - freezes[0] > 60000) { freezes.shift(); }
     if (freezes.length >= 2) {
@@ -423,6 +425,8 @@
     h += '</div>';
     if (part !== 'rec') {
       // Android's own navigation keys: back, home (all apps), recent apps; then settings.
+      // 16:9 for a video app (MCU1 test, shape by app): wide ↔ back.
+      if (set.a === 'app' && shapeInfo && shapeInfo.v) { h += '<button data-k="wide">' + (shapeInfo.s === 'wide' ? '▯' : '▭ 16:9') + '</button>'; }
       h += '<button data-k="back">◀</button><button data-k="home">●</button><button data-k="recents">■</button><button data-k="set">⚙</button>';
     }
     return h;
@@ -469,6 +473,7 @@
     var c = el.getAttribute('data-c'), k = el.getAttribute('data-k');
     if (c) { if (ws && ws.readyState === 1) { ws.send('launch:' + c); } }
     else if (k === 'set') { showPanel(!panelOpen); }
+    else if (k === 'wide') { if (ws && ws.readyState === 1) { ws.send('wide'); } }
     else if (k && ws && ws.readyState === 1) { ws.send('k:' + k); }
   }
   for (var di = 0; di < 2; di++) {
@@ -614,6 +619,11 @@
         showStats();
       }
       else if (d === 'pn') { loadPanel(); }
+      else if (d.indexOf('sh:') === 0) {
+        var sp = d.split(':'), ns = sp[1], nv = sp[2] === '1';
+        if (ns !== shapeInfo.s) { shapeAt = now(); }
+        if (ns !== shapeInfo.s || nv !== shapeInfo.v) { shapeInfo.s = ns; shapeInfo.v = nv; if (set.d === 'car') { applyDock(); } }
+      }
       else if (d.indexOf('cd:') === 0 && d.charAt(3) === '✗') { carBanner(d.substr(3)); document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('cd:') === 0) { document.getElementById('carRes').innerHTML = d.substr(3).replace(/</g, '&lt;'); }
       else if (d.indexOf('ti:') === 0) {

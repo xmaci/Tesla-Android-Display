@@ -88,8 +88,17 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         fun launchOnCar(component: String) {
             val svc = self ?: return
             Thread {
-                svc.carLaunch = component; svc.car?.launch(component)
+                svc.carLaunch = component; svc.shapeForLaunch(component); svc.car?.launch(component)
                 CarApps.addRecent(svc, component); svc.panelChanged()
+            }.start()
+        }
+
+        /** Car home, recent apps: close [component]'s app (long press, or "close all"). */
+        fun closeOnCar(component: String) {
+            val svc = self ?: return
+            Thread {
+                svc.car?.closeApp(component.substringBefore('/'))
+                CarApps.removeRecent(svc, component); svc.panelChanged()
             }.start()
         }
 
@@ -818,9 +827,10 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
                 DiagLog.add("shape", "shape by app ${if (adaptive) "on" else "off"}")
                 car?.takeIf { !it.mirror }?.let { c ->
                     c.watch(adaptive)
-                    if (!adaptive) setShape("fixed")
+                    if (!adaptive) { videoTop = false; setShape("fixed"); applySize("shape by app off") }
                 }
             }
+            "wide" -> toggleWide()
             "ph" -> {
                 dimPhone = p.getOrNull(1) != "normal"
                 car?.takeIf { !it.mirror }?.let { c ->
@@ -839,7 +849,7 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
             "launch" -> {
                 val c = text.substring(7).trim(); carLaunch = c
                 // Shape first, so the app opens already in its size (no relayout right after it starts).
-                if (adaptive) { launchedAt = SystemClock.uptimeMillis(); setShape(if (c.startsWith("com.waze/")) "tall" else "fixed") }
+                shapeForLaunch(c)
                 car?.launch(c)
                 CarApps.addRecent(this, c); panelChanged()
             }
@@ -878,7 +888,11 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
 
     /** The car screen size for the current shape: same number of pixels as the fixed size, other proportions. */
     private fun screenSize(): Triple<Int, Int, Int> {
-        val (w, h, d) = carSize()
+        val (w0, h0, d0) = carSize()
+        // YouTube / Netflix on top: a phone-like density (short side under 600 dp) — on a tablet-sized screen
+        // YouTube's full screen only fills its window and never asks for landscape.
+        val d = if (adaptive && videoTop) maxOf(d0, Math.ceil(minOf(w0, h0) * 160.0 / 560).toInt()) else d0
+        val w = w0; val h = h0
         if (shape == "fixed") return Triple(w, h, d)
         val px = w.toDouble() * h
         val a = Math.sqrt(px * 9 / 16)            // short side
@@ -887,12 +901,40 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         return if (shape == "tall") Triple(s, l, d) else Triple(l, s, d)
     }
 
-    private fun setShape(sh: String) {
+    /** Video app (YouTube, Netflix) on top of the car screen: phone-like density and the 16:9 button. */
+    @Volatile private var videoTop = false
+    /** How 16:9 was entered: "land" (app asked for landscape), "nosensor", "manual" (the dock button). */
+    @Volatile private var wideBy = ""
+
+    private fun setShape(sh: String, by: String = "") {
+        if (sh == "wide" && by.isNotEmpty()) wideBy = by
         if (sh == shape) return
         shape = sh
+        if (sh != "wide") wideBy = ""
+        applySize("car screen $sh${if (by.isNotEmpty()) " ($by)" else ""}")
+    }
+
+    private fun setVideoTop(v: Boolean) {
+        if (v == videoTop) return
+        videoTop = v
+        applySize(if (v) "video app: phone-like density" else "video app gone")
+    }
+
+    private fun applySize(why: String) {
         val (w, h, d) = screenSize()
-        DiagLog.add("shape", "car screen $sh → ${w}x$h")
+        DiagLog.add("shape", "$why → ${w}x$h@$d")
         car?.takeIf { !it.mirror }?.resize(w, h, d)
+        try { conn?.sendText("sh:$shape:${if (videoTop) 1 else 0}") } catch (_: Throwable) {}
+    }
+
+    /** Opening [c] on the car screen (dock or car home): its shape first, so it opens in its size. */
+    private fun shapeForLaunch(c: String) {
+        if (!adaptive) return
+        launchedAt = SystemClock.uptimeMillis()
+        val pkg = c.substringBefore('/')
+        videoTop = pkg in videoApps
+        setShape(if (pkg == "com.waze") "tall" else "fixed")
+        applySize("open $pkg")
     }
 
     private var lastTop = ""
@@ -921,14 +963,27 @@ class StreamService : Service(), CarServer.Listener, CarDisplay.Listener {
         if (now - topSince < 1400) return
         if (now - launchedAt < 3000) { captureHandler.postDelayed({ if (lastTop == key) onTop(pkg, orient) }, 3000 - (now - launchedAt) + 50); return }
         if (pkg == "-" || pkg == "com.google.android.gms" || pkg == "android") return
-        val full = orient.contains("LANDSCAPE") || (orient.contains("NOSENSOR") && pkg in videoApps)
+        val video = pkg in videoApps
+        setVideoTop(video)
+        val land = orient.contains("LANDSCAPE")
+        val nosensor = orient.contains("NOSENSOR") && video
         val portrait = orient.contains("PORTRAIT") || orient.endsWith("_USER")
-        setShape(when {
-            full -> "wide"
-            shape == "wide" && pkg in videoApps && !portrait -> "wide"
-            pkg == "com.waze" -> "tall"
-            else -> "fixed"
-        })
+        when {
+            land -> setShape("wide", "land")
+            nosensor -> setShape("wide", "nosensor")
+            // Stay 16:9: by the button until pressed again / another app; by "nosensor" until portrait
+            // (once 16:9 YouTube may ask for nothing); by "land" only while landscape is asked for.
+            shape == "wide" && video && (wideBy == "manual" || (wideBy == "nosensor" && !portrait)) -> {}
+            pkg == "com.waze" -> setShape("tall")
+            else -> setShape("fixed")
+        }
+    }
+
+    /** The dock's 16:9 button: wide ↔ fixed for the video app on top. */
+    private fun toggleWide() {
+        if (!adaptive) return
+        launchedAt = SystemClock.uptimeMillis()          // let the watcher not undo it right away
+        if (shape == "wide") setShape("fixed") else setShape("wide", "manual")
     }
 
     private fun carSize(): Triple<Int, Int, Int> {

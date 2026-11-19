@@ -57,6 +57,13 @@
   .dk .bt { font-size: 13px; color: #a6abb3; }
   .dk .sep { flex-shrink: 0; font-size: 12px; color: #8a9099; padding: 6px; text-transform: uppercase; }
   /* apps take what is left and are cut off at the end; the controls always stay visible */
+  #search { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: #111316; z-index: 6; display: none; padding: 16px; box-sizing: border-box; overflow-y: auto; }
+  #search .top { display: flex; align-items: center; }
+  #sq { flex: 1; min-width: 0; font-size: 30px; padding: 12px 16px; border-radius: 14px; border: 2px solid #3c4048; background: #1d2025; color: #fff; }
+  #sclose { width: 72px; height: 64px; margin-left: 12px; font-size: 30px; border: 0; border-radius: 14px; background: #2c3036; color: #e8eaed; }
+  #sres { margin-top: 16px; }
+  #sres button { width: 150px; height: 140px; margin: 6px; vertical-align: top; border: 0; border-radius: 16px; background: #1d2025; color: #e8eaed; font-size: 17px; overflow: hidden; }
+  #sres img { width: 72px; height: 72px; display: block; margin: 8px auto 6px; }
   .dk .apps { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; align-items: center; }
   .dk.side .apps { flex-direction: column; }
   .dk.flat .apps { flex-direction: row; }
@@ -80,6 +87,7 @@
 <div id="dock" class="dk"></div><div id="dock2" class="dk"></div>
 <div id="prof"></div>
 <div id="msg">Підключення… · Connecting…</div>
+<div id="search"><div class="top"><input id="sq" type="text" autocomplete="off" placeholder="Пошук додатка · Search apps"><button id="sclose">✕</button></div><div id="sres"></div></div>
 <div id="panel">
   <div class="row"><div class="lbl">Екран · Screen</div><div id="optD"></div>
     <div class="hint" id="carRes">Авто = окремий екран у формі авто, телефон можна заблокувати (потрібен помічник) · Car = its own car-shaped screen, the phone can stay locked (needs the helper)</div></div>
@@ -402,6 +410,40 @@
     st.top = side === 'bottom' ? 'auto' : top + 'px'; st.bottom = side === 'top' ? 'auto' : '0';
     st.width = ''; st.height = '';
   }
+  // ---- app search (dock 🔍): type a name with the car's keyboard, tap the app to open it on the car ----
+  var MAG = '<svg width="28" height="28" viewBox="0 0 24 24" style="vertical-align:middle"><circle cx="10" cy="10" r="6.5" fill="none" stroke="#e8eaed" stroke-width="2.6"/><line x1="15" y1="15" x2="21" y2="21" stroke="#e8eaed" stroke-width="2.8" stroke-linecap="round"/></svg>';
+  var allApps = null, sEl = document.getElementById('search'), sq = document.getElementById('sq'), sres = document.getElementById('sres');
+  function openSearch() {
+    sEl.style.display = 'block'; sq.value = ''; sres.innerHTML = '';
+    if (!allApps) {
+      var x = new XMLHttpRequest();
+      x.open('GET', '/apps?t=' + now(), true);
+      x.onload = function () { try { allApps = JSON.parse(x.responseText); } catch (e) { allApps = []; } showResults(); };
+      x.send();
+    } else { showResults(); }
+    setTimeout(function () { try { sq.focus(); } catch (e) {} }, 50);
+  }
+  function closeSearch() { sEl.style.display = 'none'; try { sq.blur(); } catch (e) {} }
+  function showResults() {
+    var q = sq.value.toLowerCase().replace(/^\s+|\s+$/g, ''), h = '', n = 0, list = allApps || [];
+    for (var i = 0; i < list.length && n < 30; i++) {
+      if (q && list[i].n.toLowerCase().indexOf(q) < 0) { continue; }
+      h += '<button data-c="' + esc(list[i].c) + '"><img src="/icon/' + esc(list[i].c) + '">' + esc(list[i].n) + '</button>';
+      n++;
+    }
+    sres.innerHTML = h || '<div style="color:#8a9099;font-size:20px;padding:12px">Нічого не знайдено · Nothing found</div>';
+  }
+  sq.addEventListener('input', showResults, false);
+  sq.addEventListener('keyup', showResults, false);
+  onTap(document.getElementById('sclose'), closeSearch, 400);
+  sres.addEventListener('click', function (e) {
+    var el = e.target;
+    while (el && el !== sres && !el.getAttribute('data-c')) { el = el.parentNode; }
+    if (!el || el === sres) { return; }
+    if (ws && ws.readyState === 1) { ws.send('launch:' + el.getAttribute('data-c')); }
+    closeSearch();
+  }, false);
+
   function appBtn(a) {
     return '<button class="app" data-c="' + esc(a.c) + '"><img src="/icon/' + esc(a.c) + '" alt="' + esc(a.n) + '"></button>';
   }
@@ -427,7 +469,7 @@
       // Android's own navigation keys: back, home (all apps), recent apps; then settings.
       // 16:9 for a video app (MCU1 test, shape by app): wide ↔ back.
       if (set.a === 'app' && shapeInfo && shapeInfo.v) { h += '<button data-k="wide">' + (shapeInfo.s === 'wide' ? '▯' : '▭ 16:9') + '</button>'; }
-      h += '<button data-k="back">◀</button><button data-k="home">●</button><button data-k="recents">■</button><button data-k="set">⚙</button>';
+      h += '<button data-k="search">' + (MAG || '🔍') + '</button><button data-k="back">◀</button><button data-k="home">●</button><button data-k="recents">■</button><button data-k="set">⚙</button>';
     }
     return h;
   }
@@ -466,13 +508,15 @@
   var dockLast = 0;
   function dockTap(e) {
     var el = e.target;
-    while (el && el.tagName !== 'BUTTON' && el.className.indexOf('dk') < 0) { el = el.parentNode; }
+    // (the 🔍 button holds an SVG: its className is not a string, so read the attribute)
+    while (el && el.tagName !== 'BUTTON' && ((el.getAttribute && el.getAttribute('class')) || '').indexOf('dk') < 0) { el = el.parentNode; }
     if (!el || el.tagName !== 'BUTTON') { return; }
     e.preventDefault();
     var n = now(); if (n - dockLast < 400) { return; } dockLast = n;
     var c = el.getAttribute('data-c'), k = el.getAttribute('data-k');
     if (c) { if (ws && ws.readyState === 1) { ws.send('launch:' + c); } }
     else if (k === 'set') { showPanel(!panelOpen); }
+    else if (k === 'search') { openSearch(); }
     else if (k === 'wide') { if (ws && ws.readyState === 1) { ws.send('wide'); } }
     else if (k && ws && ws.readyState === 1) { ws.send('k:' + k); }
   }

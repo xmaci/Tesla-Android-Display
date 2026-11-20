@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.15.17"
+        const val VERSION = "0.15.18"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -167,7 +167,14 @@ class MainActivity : Activity() {
         bigButton = ImageView(this).apply {
             setImageResource(R.drawable.ic_start)
             contentDescription = "Start"
-            setOnClickListener { if (StreamService.running || CarVpnService.running) stopAll() else startFlow() }
+            // One tap = one action: a double tap started and stopped at once (report 20.11), and the hotspot,
+            // switched on by the start a moment later, then stayed on.
+            setOnClickListener {
+                val t = SystemClock.uptimeMillis()
+                if (t - lastBigTap < 1200) return@setOnClickListener
+                lastBigTap = t
+                if (StreamService.running || CarVpnService.running) stopAll() else startFlow()
+            }
         }
         col.addView(bigButton, LinearLayout.LayoutParams((168 * dp).toInt(), (168 * dp).toInt()).apply {
             topMargin = pad; bottomMargin = pad / 2
@@ -297,6 +304,7 @@ class MainActivity : Activity() {
         Thread {
             val since = SystemClock.uptimeMillis() - lastHotspotOff
             if (since < 8000) repeat(30) { if (hotspotOn()) Thread.sleep(200) }
+            if (!(StreamService.running || CarVpnService.running)) return@Thread      // stopped meanwhile
             if (!hotspotOn()) switchHotspot(true) else DiagLog.add("hot", "hotspot already on — left as is")
         }.start()
         // Like ATTD's «Старт»: bring the helper up too if it is not running and the phone is on Wi‑Fi.
@@ -363,6 +371,7 @@ class MainActivity : Activity() {
      * (Android 17 Pixel: error 14), the touch service presses the switch on the hotspot settings page.
      */
     @Volatile private var lastHotspotOff = -100_000L
+    private var lastBigTap = -10_000L
 
     private fun switchHotspot(on: Boolean) {
         if (!on) lastHotspotOff = SystemClock.uptimeMillis()

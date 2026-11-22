@@ -38,7 +38,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private companion object {
-        const val VERSION = "0.16.7-tegra"
+        const val VERSION = "0.16.8-tegra"
         const val REQ_VPN = 1
         const val REQ_CAPTURE = 2
         const val REQ_NOTIF = 3
@@ -285,6 +285,7 @@ class MainActivity : Activity() {
     // ---------- start / stop ----------
 
     private fun startFlow() {
+        startWanted = true
         val ip = ipField.text.toString().trim()
         if (!Config.isValidIpv4(ip) || Config.isPrivate(ip)) {
             Toast.makeText(this, "Невірна або приватна адреса (Додатково) · Invalid or private address (Advanced)", Toast.LENGTH_LONG).show()
@@ -304,7 +305,7 @@ class MainActivity : Activity() {
         Thread {
             val since = SystemClock.uptimeMillis() - lastHotspotOff
             if (since < 8000) repeat(30) { if (hotspotOn()) Thread.sleep(200) }
-            if (!(StreamService.running || CarVpnService.running)) return@Thread      // stopped meanwhile
+            if (!startWanted) return@Thread      // Stop pressed meanwhile (the services may not be up yet)
             if (!hotspotOn()) switchHotspot(true) else DiagLog.add("hot", "hotspot already on — left as is")
         }.start()
         // Like ATTD's «Старт»: bring the helper up too if it is not running and the phone is on Wi‑Fi.
@@ -357,6 +358,7 @@ class MainActivity : Activity() {
     }
 
     private fun stopAll() {
+        startWanted = false
         // Hotspot off first, and only if TeslaDroid switched it on (one the user had on stays on).
         val ours = HotspotCtl.takeOurs(this)
         DiagLog.add("strm", "Stop in the app · hotspot ours=$ours")
@@ -372,6 +374,8 @@ class MainActivity : Activity() {
      */
     @Volatile private var lastHotspotOff = -100_000L
     private var lastBigTap = -10_000L
+    /** Start pressed and not stopped since (the services report "running" only a moment later). */
+    @Volatile private var startWanted = false
 
     private fun switchHotspot(on: Boolean) {
         if (!on) lastHotspotOff = SystemClock.uptimeMillis()

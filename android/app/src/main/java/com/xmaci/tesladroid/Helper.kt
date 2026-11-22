@@ -57,7 +57,11 @@ object Helper {
      */
     fun start(ctx: Context): String {
         DiagLog.init(ctx)
-        return startInner(ctx).also { DiagLog.add("help", "start: " + it.lineSequence().first(), important = !it.startsWith("running") && !it.startsWith("already")) }
+        return startInner(ctx).also {
+            DiagLog.add("help", "start: " + it.lineSequence().first(), important = !it.startsWith("running") && !it.startsWith("already"))
+            // The rest (why the last helper stopped, or why this one does not answer) into the report too.
+            it.lineSequence().drop(1).filter { l -> l.isNotBlank() }.take(40).forEach { l -> DiagLog.add("help", "  $l") }
+        }
     }
 
     private fun startInner(ctx: Context): String {
